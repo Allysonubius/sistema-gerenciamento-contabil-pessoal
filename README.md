@@ -20,6 +20,29 @@ Aplicação desktop para Windows de controle financeiro pessoal. Por dentro trab
 
 O [Manual do Sistema (PDF)](Manual_do_Sistema.pdf) explica cada tela em linguagem simples.
 
+## Demonstração com dados fictícios
+
+Para gravar um vídeo, tirar prints ou experimentar sem medo, o repositório traz uma base
+inventada (a persona "Ana Paula Ribeiro", com um ano de histórico, cartões, dívidas,
+contas fixas e orçamento):
+
+```powershell
+python demo\popular_demo.py   # cria a base fictícia em demo\SistemaContabil\
+python demo\abrir_demo.py     # abre o programa usando essa base
+```
+
+Os dois mundos **não se misturam**:
+
+- a demonstração vive em `demo\SistemaContabil\`, nunca em `%LOCALAPPDATA%`, e os scripts
+  se recusam a rodar se a pasta apontada for a de dados reais;
+- rodando sobre ela, o programa exibe a tarja **DEMONSTRAÇÃO — dados fictícios** no menu
+  lateral e no título da janela;
+- **o executável distribuído não tem demonstração alguma**: `demo/` não entra no pacote e
+  a marca é ignorada quando o programa roda empacotado. Quem baixa o `.exe` vê sempre, e
+  somente, os próprios dados.
+
+O roteiro sugerido de gravação, tela por tela, está em [`demo/ROTEIRO.md`](demo/ROTEIRO.md).
+
 ## Rodar a partir do código
 
 Requer **Python 3.11+** no Windows (o Tkinter vem junto com o instalador oficial).

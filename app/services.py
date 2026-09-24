@@ -1155,6 +1155,10 @@ def listar_dividas(incluir_quitadas: bool = False) -> list[dict]:
     filtro_ativo = "" if incluir_quitadas else " AND ativo=1"
     for conta in db.query("SELECT * FROM conta WHERE tipo='PASSIVO' AND aceita_lancamento=1"
                           f"{filtro_ativo} ORDER BY codigo"):
+        # A provisão de multa e juros é conta interna do sistema, não uma dívida
+        # que o usuário contraiu — ela não entra na lista.
+        if conta["codigo"] == CONTA_PROVISAO:
+            continue
         saldo = saldo_conta(conta["id"])
         if abs(saldo) < CENTAVO and not incluir_quitadas:
             continue

@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from app import db, instancia
-from app.config import APP_NAME, APP_VERSION
+from app.config import APP_NAME, APP_VERSION, modo_demonstracao
 from app.tray import BandejaSistema
 from app.ui import theme
 from app.ui.ajuda import JanelaAjuda
@@ -44,7 +44,8 @@ INTERVALO_BACKUP_MS = 30 * 60 * 1000
 class Aplicacao(tk.Tk):
     def __init__(self, iniciar_minimizado: bool = False):
         super().__init__()
-        self.title(APP_NAME)
+        self.title(f"{APP_NAME} — DEMONSTRAÇÃO (dados fictícios)" if modo_demonstracao()
+                   else APP_NAME)
         self._abrir_no_monitor()
         theme.aplicar(self)
         self._definir_icone()
@@ -195,6 +196,16 @@ class Aplicacao(tk.Tk):
                  font=(theme.FONTE, 15, "bold"), anchor="w").pack(fill="x")
         tk.Label(marca, text="controle financeiro pessoal", bg=CORES["barra"],
                  fg=CORES["barra_texto"], font=(theme.FONTE, 9), anchor="w").pack(fill="x")
+
+        # Base fictícia: a tarja deixa claro, em qualquer print ou gravação, que
+        # aqueles números não são de ninguém. O executável nunca chega aqui.
+        if modo_demonstracao():
+            tarja = tk.Frame(lateral, bg=CORES["alerta"])
+            tarja.pack(fill="x", padx=18, pady=(0, 14))
+            tk.Label(tarja, text="DEMONSTRAÇÃO", bg=CORES["alerta"], fg="#1a1a1a",
+                     font=(theme.FONTE, 10, "bold")).pack(pady=(6, 0))
+            tk.Label(tarja, text="dados fictícios", bg=CORES["alerta"], fg="#1a1a1a",
+                     font=(theme.FONTE, 9)).pack(pady=(0, 6))
 
         self._area = ttk.Frame(container)
         self._area.pack(side="right", fill="both", expand=True)

@@ -9,6 +9,8 @@ arquivosbancos/
 backups/
 dados/
 app.log
+# A base ficticia e gerada por demo/popular_demo.py; so os scripts sao versionados.
+demo/SistemaContabil/
 
 # --- artefatos de build ----------------------------------------------------
 icone.ico

@@ -178,6 +178,18 @@ def test_divida_perdoada_nao_conta_como_paga(sistema, contas, divida):
     assert item(sistema, divida)["pago"] == 200.0    # só o que saiu mesmo
 
 
+def test_provisao_de_encargos_nao_aparece_como_divida(sistema, contas, fixar_hoje):
+    """A conta interna 2.1.02 guarda multa e juros provisionados — não é dívida."""
+    fixar_hoje("2026-04-20")
+    titulo = sistema.salvar_titulo(None, "PAGAR", "Conta atrasada", "", 100.0, "2026-03-10",
+                                   contas["despesa"], None, multa_pct=2.0, juros_mes_pct=1.0)
+    sistema.lancar_encargos_do_mes("2026-04-20")
+    assert sistema.obter_titulo(titulo)["encargos_lancados"] > 0   # provisão existe
+
+    nomes = [d["nome"] for d in sistema.listar_dividas(incluir_quitadas=True)]
+    assert "Contas a Pagar" not in nomes
+
+
 def test_procurar_no_historico(sistema, contas):
     primeira = sistema.criar_divida("Carro", "Banco X", 500.0, "2026-01-10")
     segunda = sistema.criar_divida("Notebook", "Loja Y", 300.0, "2026-01-10")
