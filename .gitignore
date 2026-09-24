@@ -1,0 +1,27 @@
+# --- dados pessoais: nada disto vai para o repositório ---------------------
+# Extratos baixados do banco (OFX/PDF/ZIP) e qualquer banco de dados.
+arquivosbancos/
+*.ofx
+*.qif
+*.db
+*.db-wal
+*.db-shm
+backups/
+dados/
+app.log
+
+# --- artefatos de build ----------------------------------------------------
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.spec
+icone.ico
+
+# --- ferramentas locais ----------------------------------------------------
+.claude/
+.pytest_cache/
+.venv/
+venv/
+.idea/
+.vscode/
