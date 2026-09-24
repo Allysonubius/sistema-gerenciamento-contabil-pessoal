@@ -342,5 +342,5 @@ pagamento e o que foi ajuste, com o saldo depois de cada um.
 
 ## Licença
 
-Uso pessoal. Sem licença declarada, valem os direitos autorais padrão: o código pode ser
-lido e estudado, mas não redistribuído sem autorização do autor.
+[GNU GPL v3](LICENSE) — você pode usar, estudar, modificar e redistribuir, desde que
+trabalhos derivados mantenham a mesma licença e o código-fonte permaneça disponível.
