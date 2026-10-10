@@ -2156,29 +2156,68 @@ class DialogoBaixa(tk.Toplevel):
         self.dt_saldo.pack(side="left", padx=8)
         self.quadro_parcial.grid_remove()
 
+        # Conferência do valor: o que foi combinado nem sempre é o que caiu na
+        # conta (salário com hora extra, desconto, reajuste). A diferença tem de
+        # saltar aos olhos antes de confirmar.
+        self.lbl_conferencia = ttk.Label(corpo, style="Secao.TLabel", wraplength=560,
+                                         justify="left")
+        self.lbl_conferencia.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 10))
+
         ttk.Label(corpo, text="Ao confirmar, este valor entra automaticamente na lista de"
                               " Entradas e Saídas.", style="Dica.TLabel").grid(
-            row=6, column=0, columnspan=2, sticky="w", pady=(0, 16))
+            row=7, column=0, columnspan=2, sticky="w", pady=(0, 16))
 
         self._parcial_visivel: bool | None = None
-        self.cp_valor.ao_mudar(self._conferir_parcial)
+        self.cp_valor.ao_mudar(self._ao_mudar_valor)
 
         botoes = ttk.Frame(corpo)
-        botoes.grid(row=7, column=0, columnspan=2, sticky="e")
+        botoes.grid(row=8, column=0, columnspan=2, sticky="e")
         ttk.Button(botoes, text="Confirmar", style="Sucesso.TButton",
                    command=self.confirmar).pack(side="right")
         ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
 
-        centralizar(self, 640, 420)
+        centralizar(self, 660, 460)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
-        self._conferir_parcial()   # já abre avisando se o valor sugerido é parcial
+        self._ao_mudar_valor()   # já abre avisando se o valor sugerido é parcial
 
     # ------------------------------------------------------------------ #
     def _devido(self) -> float:
         """Quanto falta pagar hoje, já com multa e juros se houver atraso."""
         return services.encargos_do_titulo(self.titulo,
                                            ate=self.dt_data.get_iso())["valor_atualizado"]
+
+    def _ao_mudar_valor(self) -> None:
+        self._conferir_parcial()
+        self._conferir_valor()
+
+    def _conferir_valor(self) -> None:
+        """Compara o valor digitado com o previsto e avisa a diferença."""
+        recebe = self.titulo["tipo"] == "RECEBER"
+        try:
+            informado = self.cp_valor.get_valor()
+            previsto = self._devido()
+        except services.RegraNegocioError:
+            self.lbl_conferencia.configure(text="")
+            return
+        diferenca = round(informado - previsto, 2)
+        if abs(diferenca) < 0.005:
+            self.lbl_conferencia.configure(
+                text=f"Confere com o previsto: {services.moeda(previsto)}.",
+                foreground=CORES["texto_suave"])
+        elif diferenca > 0:
+            self.lbl_conferencia.configure(
+                text=(f"{services.moeda(diferenca)} A MAIS que o previsto"
+                      f" ({services.moeda(previsto)})."
+                      + ("  Entrou mais do que o combinado?" if recebe
+                         else "  Pagou mais do que devia?")),
+                foreground=CORES["sucesso"] if recebe else CORES["alerta"])
+        else:
+            self.lbl_conferencia.configure(
+                text=(f"{services.moeda(abs(diferenca))} A MENOS que o previsto"
+                      f" ({services.moeda(previsto)})."
+                      + ("  Recebeu menos do que o combinado?" if recebe else "")),
+                foreground=CORES["alerta"] if recebe else CORES["texto"])
 
     def _conferir_parcial(self) -> None:
         """Mostra as opções de saldo quando o valor digitado é menor que o devido."""
@@ -2221,6 +2260,54 @@ class DialogoBaixa(tk.Toplevel):
         largura = max(self.winfo_width(), self.winfo_reqwidth())
         self.geometry(f"{largura}x{min(altura, limite)}")
 
+    def _confirmar_valor(self, pago: float, data: str, caixa_id: int) -> bool:
+        """Pergunta se o valor é esse mesmo — sempre, antes de registrar."""
+        recebe = self.titulo["tipo"] == "RECEBER"
+        previsto = self._devido()
+        diferenca = round(pago - previsto, 2)
+        conta = services.obter_conta(caixa_id)
+
+        linhas = [f"{self.titulo['descricao']}",
+                  "",
+                  f"Previsto:   {services.moeda(previsto)}",
+                  f"{'Recebido' if recebe else 'Pago'}:   {services.moeda(pago)}"]
+        if abs(diferenca) >= 0.005:
+            lado = "a mais" if diferenca > 0 else "a menos"
+            linhas.append(f"Diferença:  {services.moeda(abs(diferenca))} {lado}")
+        linhas += ["",
+                   f"{'Entra em' if recebe else 'Sai de'}: {conta['nome'] if conta else '—'}",
+                   f"Data: {services.para_br(data)}",
+                   "",
+                   "Foi esse valor mesmo?"]
+        return messagebox.askyesno("Confirme o valor", "\n".join(linhas), parent=self)
+
+    def _oferecer_novo_valor_fixo(self, pago: float) -> None:
+        """Conta fixa que mudou de valor: pergunta se vale para os próximos meses."""
+        if not self.titulo["recorrencia_id"]:
+            return
+        if abs(round(pago - float(self.titulo["valor"]), 2)) < 0.005:
+            return
+        competencia = self.titulo["competencia"] or self.titulo["vencimento"][:7]
+        recebe = self.titulo["tipo"] == "RECEBER"
+        if not messagebox.askyesno(
+                "Vale para os próximos meses?",
+                f"'{self.titulo['descricao']}' é uma conta fixa de"
+                f" {services.moeda(self.titulo['valor'])} e desta vez"
+                f" {'entrou' if recebe else 'saiu'} {services.moeda(pago)}.\n\n"
+                "Os próximos meses passam a usar o valor novo?\n\n"
+                "(Responda não se foi coisa de um mês só.)", parent=self.master):
+            return
+        try:
+            atingidos = services.aplicar_reajuste(self.titulo["recorrencia_id"],
+                                                  competencia, pago)
+        except services.RegraNegocioError as erro:
+            messagebox.showwarning("Não foi possível", str(erro), parent=self.master)
+            return
+        messagebox.showinfo(
+            "Valor atualizado",
+            f"{atingidos} mês(es) em aberto passaram a usar {services.moeda(pago)}."
+            " Os meses já pagos não mudaram.", parent=self.master)
+
     def confirmar(self) -> None:
         try:
             caixa_id = self.sel_caixa.get_conta_id()
@@ -2228,6 +2315,8 @@ class DialogoBaixa(tk.Toplevel):
                 raise services.RegraNegocioError("Escolha a conta usada no pagamento.")
             pago = self.cp_valor.get_valor()
             data = self.dt_data.get_iso()
+            if not self._confirmar_valor(pago, data, caixa_id):
+                return                      # volta para o formulário, nada é registrado
             falta = round(self._devido() - pago, 2)
             parcial = falta > 0.005 and self.var_resto.get() == "aberto"
             services.baixar_titulo(
@@ -2245,4 +2334,6 @@ class DialogoBaixa(tk.Toplevel):
                 f"O que faltou ({services.moeda(falta)}) virou uma nova conta a pagar,"
                 f" com vencimento em {services.para_br(self.dt_saldo.get_iso())}.",
                 parent=self.master)
+        elif self.titulo["recorrencia_id"]:
+            self._oferecer_novo_valor_fixo(pago)
         self.destroy()
