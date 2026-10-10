@@ -378,7 +378,8 @@ class DialogoMovimento(tk.Toplevel):
                     "Ex.: Salário, Freelance, Aluguel recebido.", self.sel_rec_cat)
         self.sel_rec_conta = SeletorConta(aba, tipos=("ATIVO",), width=54)
         self._campo(aba, 3, "Onde o dinheiro entrou?",
-                    "Conta corrente, poupança ou carteira.", self.sel_rec_conta)
+                    "Conta corrente, poupança, carteira digital — ou 'Dinheiro em mãos',"
+                    " quando o valor ficou em espécie com você.", self.sel_rec_conta)
         return aba
 
     def _aba_transferencia(self) -> ttk.Frame:
