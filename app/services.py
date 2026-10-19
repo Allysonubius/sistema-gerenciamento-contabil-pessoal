@@ -2595,36 +2595,42 @@ def reativar_recorrencia(recorrencia_id: int) -> int:
     return gerar_titulos_recorrentes()
 
 
-def pausar_recorrencia(recorrencia_id: int) -> int:
-    """Para de lançar novos meses e tira da lista os meses seguintes.
+def _mes_anterior(competencia: str) -> str:
+    ano, mes = (int(p) for p in competencia[:7].split("-"))
+    return f"{ano - 1}-12" if mes == 1 else f"{ano}-{mes - 1:02d}"
 
-    Pausar um salário que acabou não pode deixar os próximos meses contando como
-    dinheiro a receber. O mês atual continua — ele ainda pode acontecer — e nada
-    que já foi pago ou recebido é tocado. Devolve quantos meses saíram.
+
+def pausar_recorrencia(recorrencia_id: int) -> int:
+    """Desativa a conta fixa: ela some do mês atual em diante.
+
+    Quem desativa não vai mais pagar (nem receber) — inclusive o mês corrente,
+    que ainda estava pendente. O que já foi pago ou recebido nunca é tocado, e os
+    meses anteriores continuam na lista para você resolver. Devolve quantos meses
+    saíram.
     """
     with db.transaction() as conn:
         conn.execute("UPDATE recorrencia SET ativo = 0 WHERE id = ?", (recorrencia_id,))
         cursor = conn.execute(
             "DELETE FROM titulo WHERE recorrencia_id = ? AND status = 'ABERTO'"
-            " AND competencia > ?", (recorrencia_id, mes_atual()))
+            " AND competencia >= ?", (recorrencia_id, mes_atual()))
     return cursor.rowcount
 
 
 def limpar_futuros_de_inativas() -> int:
-    """Tira da lista os meses futuros de contas fixas que não estão mais ativas.
+    """Tira da lista o que contas fixas inativas ainda têm lançado à frente.
 
     Vale para o que ficou para trás: antes, pausar só parava de gerar, e os meses
     já lançados continuavam aparecendo em Contas a Pagar e Receber.
     """
-    atual = mes_atual()
+    anterior = _mes_anterior(mes_atual())
     with db.transaction() as conn:
-        # O corte respeita o fim combinado: quem encerrou em dezembro mantém os
-        # meses até lá; quem só pausou mantém o mês atual.
+        # Quem encerrou com um mês final combinado mantém os meses até lá; quem
+        # apenas desativou sai do mês atual em diante.
         cursor = conn.execute(
             "DELETE FROM titulo WHERE status = 'ABERTO' AND EXISTS ("
             "  SELECT 1 FROM recorrencia r WHERE r.id = titulo.recorrencia_id"
-            "    AND r.ativo = 0 AND titulo.competencia > max(IFNULL(r.fim, ?), ?))",
-            (atual, atual))
+            "    AND r.ativo = 0 AND titulo.competencia > IFNULL(r.fim, ?))",
+            (anterior,))
     return cursor.rowcount
 
 

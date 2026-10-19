@@ -179,8 +179,8 @@ class Salarios(ttk.Frame):
         if rec["ativo"]:
             removidos = services.pausar_recorrencia(rec_id)
             self.app.notificar(
-                f"'{rec['descricao']}' pausada: {removidos} mês(es) futuro(s) saíram de"
-                " Contas a Pagar e Receber.")
+                f"'{rec['descricao']}' pausada: {removidos} mês(es) em aberto saíram de"
+                " Contas a Pagar e Receber, deste mês em diante.")
         else:
             services.reativar_recorrencia(rec_id)
             self.app.notificar(f"'{rec['descricao']}' voltou a entrar todo mês.")

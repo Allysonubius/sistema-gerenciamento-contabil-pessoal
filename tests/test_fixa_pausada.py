@@ -18,14 +18,14 @@ def meses(sistema, recorrencia) -> list[str]:
                   if t["recorrencia_id"] == recorrencia)
 
 
-def test_pausar_tira_os_meses_seguintes(sistema, salario):
-    atual = sistema.mes_atual()
+def test_desativar_tira_o_mes_atual_e_os_seguintes(sistema, salario):
+    """Quem desativa não vai mais receber — nem o mês corrente, que estava pendente."""
     assert len(meses(sistema, salario)) > 1
 
     removidos = sistema.pausar_recorrencia(salario)
 
     assert removidos > 0
-    assert meses(sistema, salario) == [atual]      # só o mês atual continua
+    assert meses(sistema, salario) == []
 
 
 def test_pausada_nao_entra_mais_no_total_a_receber(sistema, salario):
@@ -57,16 +57,30 @@ def test_pausada_nao_gera_novos_meses(sistema, salario):
     sistema.pausar_recorrencia(salario)
     sistema.gerar_titulos_recorrentes()
 
-    assert meses(sistema, salario) == [sistema.mes_atual()]
+    assert meses(sistema, salario) == []
+
+
+def test_mes_atual_pendente_some_da_lista(sistema, salario):
+    atual = sistema.mes_atual()
+    pendentes = sistema.listar_titulos(tipo="RECEBER", status="ABERTO",
+                                       desde=f"{atual}-01", ate=f"{atual}-28")
+    assert pendentes, "o mês atual estava pendente antes de desativar"
+
+    sistema.pausar_recorrencia(salario)
+
+    assert sistema.listar_titulos(tipo="RECEBER", status="ABERTO",
+                                  desde=f"{atual}-01", ate=f"{atual}-28") == []
 
 
 def test_voltar_a_ativar_traz_os_meses_de_novo(sistema, salario):
     sistema.pausar_recorrencia(salario)
-    assert len(meses(sistema, salario)) == 1
+    assert meses(sistema, salario) == []
 
     sistema.reativar_recorrencia(salario)
 
-    assert len(meses(sistema, salario)) > 1
+    voltaram = meses(sistema, salario)
+    assert len(voltaram) > 1
+    assert voltaram[0] == sistema.mes_atual()     # volta já no mês corrente
 
 
 def test_limpeza_alcanca_o_que_ja_estava_na_lista(sistema, salario):
@@ -77,7 +91,7 @@ def test_limpeza_alcanca_o_que_ja_estava_na_lista(sistema, salario):
     removidos = sistema.limpar_futuros_de_inativas()
 
     assert removidos > 0
-    assert meses(sistema, salario) == [sistema.mes_atual()]
+    assert meses(sistema, salario) == []
 
 
 def test_limpeza_nao_mexe_nas_ativas(sistema, contas, salario):

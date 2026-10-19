@@ -576,23 +576,23 @@ class Financeiro(ttk.Frame):
                                " voltaram para a lista.")
             return
 
-        futuros = db.query_one(
+        em_aberto = db.query_one(
             "SELECT COUNT(*) AS c FROM titulo WHERE recorrencia_id = ?"
-            " AND status = 'ABERTO' AND competencia > ?",
+            " AND status = 'ABERTO' AND competencia >= ?",
             (titulo["recorrencia_id"], services.mes_atual()))["c"]
         if not messagebox.askyesno(
                 "Desativar",
                 f"'{titulo['descricao']}' deixa de"
-                f" {'entrar' if recebe else 'ser cobrada'} a partir do mês que vem.\n\n"
-                f"{futuros} mês(es) futuro(s) saem da lista agora. O mês atual e tudo o que"
-                f" já foi {'recebido' if recebe else 'pago'} continuam.\n\nConfirma?",
-                parent=self):
+                f" {'entrar' if recebe else 'ser cobrada'} deste mês em diante.\n\n"
+                f"{em_aberto} mês(es) em aberto saem da lista agora, incluindo o mês atual."
+                f" Tudo o que já foi {'recebido' if recebe else 'pago'} continua no"
+                " histórico.\n\nConfirma?", parent=self):
             return
         removidos = services.pausar_recorrencia(titulo["recorrencia_id"])
         self._apos()
         self.app.notificar(
-            f"'{titulo['descricao']}' desativada: {removidos} mês(es) futuro(s) saíram da"
-            " lista. Para voltar, use 'Contas fixas'.")
+            f"'{titulo['descricao']}' desativada: {removidos} mês(es) em aberto saíram da"
+            " lista, deste mês em diante. Para voltar, use o botão 'Ativar'.")
 
     def alternar_automatico(self) -> None:
         """Liga ou desliga o débito automático da conta escolhida."""
@@ -1151,9 +1151,9 @@ class JanelaContasFixas(tk.Toplevel):
             if removidos:
                 messagebox.showinfo(
                     "Pausada",
-                    f"'{rec['descricao']}' não gera mais meses.\n\n{removidos} mês(es)"
-                    " futuro(s) saíram de Contas a Pagar e Receber. O mês atual e tudo"
-                    " o que já foi pago continuam.", parent=self)
+                    f"'{rec['descricao']}' não gera mais meses.\n\n{removidos} mês(es) em"
+                    " aberto saíram de Contas a Pagar e Receber, a partir do mês atual."
+                    " O que já foi pago continua no histórico.", parent=self)
         else:
             # Reativar limpa um fim já passado: senão ela ficaria ativa sem gerar nada.
             services.reativar_recorrencia(rec_id)

@@ -123,12 +123,12 @@ def test_reativar_encerrada_volta_a_gerar(sistema, contas):
     assert len(meses_da(sistema, recorrencia)) > 12
 
 
-def test_pausar_mantem_o_mes_atual_e_tira_os_seguintes(sistema, contas):
-    """Pausada não pode seguir contando nos meses à frente."""
+def test_desativar_tira_do_mes_atual_em_diante(sistema, contas):
+    """Desativada não pode seguir cobrando — nem no mês corrente, nem à frente."""
     recorrencia, _ = criar(sistema, contas)
     assert len(meses_da(sistema, recorrencia)) > 1
 
     sistema.pausar_recorrencia(recorrencia)
     sistema.gerar_titulos_recorrentes(ate_competencia=mais_meses(sistema, sistema.mes_atual(), 30))
 
-    assert meses_da(sistema, recorrencia) == [sistema.mes_atual()]
+    assert meses_da(sistema, recorrencia) == []
