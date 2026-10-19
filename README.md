@@ -94,6 +94,7 @@ Este repositório contém **apenas o código**. Ficam de fora, pelo `.gitignore`
 | **Entradas e Saídas** | Lista de tudo que entrou e saiu, com filtros de período, tipo, texto e conta. |
 | **Minhas Contas** | Cada banco, carteira, cartão pré-pago, vale ou cartão de crédito com saldo próprio, movimento do período, extrato individual, transferência e acerto de saldo. |
 | **Contas a Pagar** | Boletos e promessas de pagamento; ao marcar como pago, o movimento é registrado sozinho. Também abriga contas fixas e empréstimos. |
+| **Salários e Rendas** | Cada fonte de renda que se repete todo mês, com total já recebido, histórico mês a mês (previsto × recebido) e o que fazer ao trocar de emprego: encerrar a fonte antiga no último mês em que entrou e cadastrar a nova. |
 | **Orçamento** | Teto mensal por categoria, com consumo, ritmo e projeção; e os objetivos de poupança. |
 | **Contas e Categorias** | Contas de dinheiro (banco, carteira, cartão) e categorias de ganho/gasto — 67 já vêm prontas. |
 | **Relatórios** | Mês a mês, Categorias mês a mês, Resumo por conta (balancete), Extrato (razão), Ganhos e gastos (DRE), Meu patrimônio (balanço) e Histórico completo (diário). |

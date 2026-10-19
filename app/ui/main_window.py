@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tkinter as tk
+from datetime import date
 from tkinter import messagebox, ttk
 
 from app import db, instancia
@@ -19,6 +20,7 @@ from app.ui.lancamentos import Lancamentos
 from app.ui.orcamento import Orcamento
 from app.ui.plano_contas import PlanoContas
 from app.ui.relatorios import Relatorios
+from app.ui.salarios import Salarios
 from app.ui.theme import CORES
 from app.ui.widgets import AreaRolavel
 
@@ -27,6 +29,7 @@ MOVIMENTOS = "Entradas e Saídas"
 CARTEIRAS = "Minhas Contas"
 CARTOES = "Meus Cartões"
 CONTAS = "Contas a Pagar"
+SALARIOS = "Salários e Rendas"
 DIVIDAS = "Dívidas"
 ORCAMENTO = "Orçamento"
 CATEGORIAS = "Categorias"
@@ -35,6 +38,10 @@ AJUSTES = "Ajustes"
 
 # De quanto em quanto tempo checamos se outra abertura pediu a janela de volta.
 INTERVALO_SINAL_MS = 800
+
+# De quanto em quanto tempo checamos se o dia virou (o programa fica aberto na
+# bandeja por dias, e o painel fala sempre do mês corrente).
+INTERVALO_VIRADA_DIA_MS = 5 * 60 * 1000
 
 # O programa costuma ficar aberto na bandeja por dias: sem esta verificação
 # periódica, a cópia do dia só sairia quando o usuário encerrasse de fato.
@@ -71,6 +78,8 @@ class Aplicacao(tk.Tk):
         self.mostrar(INICIO)
         self._vigiar_segunda_abertura()
         self._vigiar_backup()
+        self._dia_em_tela = date.today()
+        self.after(INTERVALO_VIRADA_DIA_MS, self._vigiar_virada_do_dia)
         # Aberto junto com o Windows: nasce perto do relógio, sem roubar a tela.
         if iniciar_minimizado:
             self.after(200, self.esconder_para_bandeja)
@@ -216,6 +225,7 @@ class Aplicacao(tk.Tk):
             ("▮", CARTEIRAS, Carteiras),
             ("▭", CARTOES, Cartoes),
             ("▤", CONTAS, Financeiro),
+            ("₪", SALARIOS, Salarios),
             ("▼", DIVIDAS, Dividas),
             ("◑", ORCAMENTO, Orcamento),
             ("☰", CATEGORIAS, PlanoContas),
@@ -276,12 +286,39 @@ class Aplicacao(tk.Tk):
         elif hasattr(tela, "recarregar"):
             tela.recarregar()
 
-    def recarregar_tudo(self) -> None:
-        if self._tela_atual:
-            tela = self._telas[self._tela_atual]
-            if hasattr(tela, "recarregar"):
+    def recarregar_tela_atual(self) -> None:
+        if not self._tela_atual:
+            return
+        tela = self._telas[self._tela_atual]
+        if hasattr(tela, "recarregar"):
+            try:
                 tela.recarregar()
+            except Exception:  # pragma: no cover - nunca derrubar a janela
+                import logging
+                logging.exception("Falha ao recarregar %s", self._tela_atual)
+
+    def recarregar_tudo(self) -> None:
+        self.recarregar_tela_atual()
         self.notificar("Informações atualizadas.")
+
+    def _vigiar_virada_do_dia(self) -> None:
+        """Mantém a tela honesta quando o programa atravessa a meia-noite.
+
+        Sem isto, quem deixa o sistema aberto na bandeja continua vendo "este
+        mês" com as contas do dia em que abriu — inclusive depois de o mês virar.
+        """
+        if self._encerrando:
+            return
+        hoje = date.today()
+        if hoje != self._dia_em_tela:
+            self._dia_em_tela = hoje
+            try:
+                self._rotinas_de_abertura()
+            except Exception:  # pragma: no cover
+                import logging
+                logging.exception("Falha nas rotinas da virada do dia")
+            self.recarregar_tela_atual()
+        self.after(INTERVALO_VIRADA_DIA_MS, self._vigiar_virada_do_dia)
 
     def atualizar_dependentes(self) -> None:
         """Mantém o painel coerente depois de gravações em outras telas."""
@@ -341,6 +378,9 @@ class Aplicacao(tk.Tk):
         self.bandeja.notificar("O sistema continua aberto aqui, perto do relógio.")
 
     def restaurar_da_bandeja(self) -> None:
+        # Voltar da bandeja refaz as contas da tela: o programa costuma passar
+        # dias aberto, e números de ontem não servem para decidir nada hoje.
+        self.recarregar_tela_atual()
         self.deiconify()
         # Volta como estava: quem deixou a janela maximizada não quer que ela
         # encolha só porque passou pela bandeja.

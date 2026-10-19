@@ -313,6 +313,10 @@ class DialogoMovimento(tk.Toplevel):
         comuns.configure(relief="solid", borderwidth=1)
         comuns.pack(side="bottom", fill="x", pady=(14, 0))
 
+        # Cada conta escolhida mostra, ao lado, quanto tem hoje e como fica
+        # depois deste registro — é o que diz se o dinheiro está onde se pensa.
+        self._saldos: list[tuple] = []
+
         self.notebook = ttk.Notebook(corpo)
         self.notebook.pack(side="top", fill="both", expand=True)
         self.notebook.add(self._aba_gasto(), text="  Gastei dinheiro  ")
@@ -343,7 +347,13 @@ class DialogoMovimento(tk.Toplevel):
         self.sel_centro = SeletorCentro(comuns, width=18)
         self.sel_centro.grid(row=1, column=3, sticky="w")
 
+        self.cp_valor.ao_mudar(self._atualizar_saldos)
+        self.notebook.bind("<<NotebookTabChanged>>",
+                           lambda _e: self._atualizar_saldos(), add="+")
+        self.dt_data.bind("<FocusOut>", lambda _e: self._atualizar_saldos(), add="+")
+
         self._carregar()
+        self._atualizar_saldos()
         centralizar(self, 920, 680)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
@@ -360,6 +370,58 @@ class DialogoMovimento(tk.Toplevel):
             row=linha + 1, column=0, sticky="w")
         widget.grid(row=linha + 2, column=0, sticky="w", pady=(4, 16))
 
+    def _com_saldo(self, pai, linha: int, seletor, sinal: int) -> None:
+        """Mostra o saldo da conta escolhida ao lado do seletor.
+
+        ``sinal`` diz o que este registro faz com ela: -1 tira dinheiro,
+        +1 põe, 0 só mostra o saldo de hoje.
+        """
+        rotulo = ttk.Label(pai, style="SecaoSuperficie.TLabel")
+        rotulo.grid(row=linha + 2, column=1, sticky="w", padx=(14, 0), pady=(4, 16))
+        self._saldos.append((seletor, rotulo, sinal))
+        seletor.bind("<<ComboboxSelected>>", lambda _e: self._atualizar_saldos(), add="+")
+        seletor.bind("<KeyRelease>", lambda _e: self._atualizar_saldos(), add="+")
+
+    def _atualizar_saldos(self) -> None:
+        """Redesenha os saldos: quanto a conta tem hoje e como fica depois."""
+        # Isto só desenha um rótulo: campo pela metade ou mal digitado não pode
+        # quebrar a janela no meio do preenchimento.
+        try:
+            valor = self.cp_valor.get_valor() if self.cp_valor.var.get().strip() else 0.0
+        except Exception:
+            valor = 0.0
+        try:
+            data = self.dt_data.get_iso()
+        except Exception:
+            data = services.hoje_iso()
+
+        for seletor, rotulo, sinal in self._saldos:
+            try:
+                conta_id = seletor.get_conta_id()
+            except Exception:
+                conta_id = None
+            if conta_id is None:
+                rotulo.configure(text="")
+                continue
+            conta = services.obter_conta(conta_id)
+            saldo = services.saldo_conta(conta_id, ate=data)
+            divida = conta["tipo"] == "PASSIVO"
+            texto = (f"deve {services.moeda(saldo)}" if divida
+                     else f"tem {services.moeda(saldo)}")
+            cor = CORES["perigo"] if (divida or saldo < 0) else CORES["texto"]
+            if sinal and valor > 0.005:
+                # No cartão de crédito, gastar aumenta a dívida em vez de baixar o saldo.
+                depois = saldo + (valor * (-sinal if divida else sinal))
+                texto += f"  →  fica {services.moeda(depois)}"
+                if not divida and depois < 0:
+                    texto += "  (fica negativa)"
+                    cor = CORES["perigo"]
+                elif divida:
+                    cor = CORES["perigo"]
+                else:
+                    cor = CORES["sucesso"] if sinal > 0 else CORES["texto"]
+            rotulo.configure(text=texto, foreground=cor)
+
     def _aba_gasto(self) -> ttk.Frame:
         aba = self._quadro()
         self.sel_gasto_cat = SeletorConta(aba, tipos=("DESPESA",), width=54)
@@ -369,6 +431,7 @@ class DialogoMovimento(tk.Toplevel):
         self._campo(aba, 3, "De onde saiu o dinheiro?",
                     "Conta corrente, carteira, poupança ou cartão de crédito.",
                     self.sel_gasto_conta)
+        self._com_saldo(aba, 3, self.sel_gasto_conta, -1)
         return aba
 
     def _aba_receita(self) -> ttk.Frame:
@@ -380,6 +443,7 @@ class DialogoMovimento(tk.Toplevel):
         self._campo(aba, 3, "Onde o dinheiro entrou?",
                     "Conta corrente, poupança, carteira digital — ou 'Dinheiro em mãos',"
                     " quando o valor ficou em espécie com você.", self.sel_rec_conta)
+        self._com_saldo(aba, 3, self.sel_rec_conta, +1)
         return aba
 
     def _aba_transferencia(self) -> ttk.Frame:
@@ -387,9 +451,11 @@ class DialogoMovimento(tk.Toplevel):
         self.sel_tr_origem = SeletorConta(aba, tipos=CONTAS_DINHEIRO, width=54)
         self._campo(aba, 0, "De qual conta saiu?", "A conta que ficou com menos dinheiro.",
                     self.sel_tr_origem)
+        self._com_saldo(aba, 0, self.sel_tr_origem, -1)
         self.sel_tr_destino = SeletorConta(aba, tipos=CONTAS_DINHEIRO, width=54)
         self._campo(aba, 3, "Para qual conta foi?", "A conta que ficou com mais dinheiro.",
                     self.sel_tr_destino)
+        self._com_saldo(aba, 3, self.sel_tr_destino, +1)
         ttk.Label(aba, text="Transferência não é ganho nem gasto: seu total continua o mesmo.",
                   style="DicaSuperficie.TLabel").grid(row=6, column=0, sticky="w")
         return aba
@@ -400,6 +466,7 @@ class DialogoMovimento(tk.Toplevel):
         self._campo(aba, 0, "Qual conta você quer acertar?",
                     "Informe quanto já existe nela hoje — use só na primeira vez.",
                     self.sel_saldo_conta)
+        self._com_saldo(aba, 0, self.sel_saldo_conta, 0)
         ttk.Label(aba, text="Se for uma conta de dívida (cartão, financiamento), o valor entra"
                             " como saldo devedor.",
                   style="DicaSuperficie.TLabel").grid(row=3, column=0, sticky="w")

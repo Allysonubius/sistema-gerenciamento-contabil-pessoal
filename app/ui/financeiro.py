@@ -987,11 +987,12 @@ class JanelaContasFixas(tk.Toplevel):
 
         topo = tk.Frame(self, bg=CORES["superficie"], padx=24, pady=16)
         topo.pack(fill="x")
-        tk.Label(topo, text="Contas fixas", bg=CORES["superficie"], fg=CORES["texto"],
-                 font=(FONTE, 16, "bold"), anchor="w").pack(fill="x")
-        tk.Label(topo, text="Aluguel, luz, internet, mensalidades. Elas não têm parcelas:"
-                            " são cobradas todo mês, sem fim, até você encerrar. O sistema"
-                            " deixa os próximos 12 meses sempre lançados.",
+        tk.Label(topo, text="Contas fixas e salários", bg=CORES["superficie"],
+                 fg=CORES["texto"], font=(FONTE, 16, "bold"), anchor="w").pack(fill="x")
+        tk.Label(topo, text="O que se repete todo mês: aluguel, luz, internet, mensalidades"
+                            " — e também o que entra, como salário e aluguel recebido."
+                            " Trocou de emprego? Edite o valor ou encerre no último mês em"
+                            " que o dinheiro entrou.",
                  bg=CORES["superficie"], fg=CORES["texto_suave"], font=(FONTE, 10),
                  anchor="w", justify="left").pack(fill="x", pady=(2, 0))
 
@@ -1000,14 +1001,15 @@ class JanelaContasFixas(tk.Toplevel):
 
         acoes = ttk.Frame(corpo)
         acoes.pack(fill="x", pady=(0, 12))
-        ttk.Button(acoes, text="Mudar o valor", style="Primario.TButton",
+        ttk.Button(acoes, text="Editar", style="Primario.TButton",
                    command=self.reajustar).pack(side="left")
         ttk.Button(acoes, text="Ativar / pausar", command=self.alternar).pack(side="left", padx=8)
         ttk.Button(acoes, text="Débito automático",
                    command=self.alternar_automatico).pack(side="left", padx=(0, 8))
         ttk.Button(acoes, text="Encerrar", style="Perigo.TButton",
                    command=self.encerrar).pack(side="left")
-        ttk.Label(acoes, text="Encerrar apaga só os meses futuros ainda não pagos.",
+        ttk.Label(acoes, text="Editar vale de um mês em diante. Encerrar tira só os meses"
+                              " futuros — o histórico fica.",
                   style="Dica.TLabel").pack(side="left", padx=12)
 
         self.tabela = Tabela(corpo, [
@@ -1024,8 +1026,8 @@ class JanelaContasFixas(tk.Toplevel):
             ("situacao", "Situação", 85, "center"),
         ], on_duplo_clique=lambda _i: self.reajustar(), altura=8)
         self.tabela.definir_texto_vazio(
-            "Nenhuma conta fixa ainda. Ao cadastrar uma conta, marque"
-            " 'É uma conta fixa: repete todo mês'.")
+            "Nada fixo por enquanto. Ao cadastrar uma conta a pagar ou a receber"
+            " (salário, por exemplo), marque 'É uma conta fixa: repete todo mês'.")
         self.tabela.pack(fill="both", expand=True)
 
         self.recarregar()
@@ -1105,19 +1107,10 @@ class JanelaContasFixas(tk.Toplevel):
 
     def encerrar(self) -> None:
         rec_id = self._selecionada()
-        if not rec_id:
-            return
-        rec = db.query_one("SELECT descricao FROM recorrencia WHERE id = ?", (rec_id,))
-        if not messagebox.askyesno(
-                "Encerrar conta fixa",
-                f"'{rec['descricao']}' deixa de ser lançada nos próximos meses.\n\n"
-                "Os meses já pagos ficam no histórico. Os meses futuros ainda em aberto"
-                " serão removidos.\n\nConfirma?", parent=self):
-            return
-        removidos = services.encerrar_recorrencia(rec_id)
-        self._apos()
-        messagebox.showinfo("Pronto", f"Conta fixa encerrada. {removidos} mês(es) futuro(s)"
-                                      " foram removidos.", parent=self)
+        if rec_id:
+            # A janela pergunta até qual mês valeu: trocar de emprego encerra o
+            # salário antigo no último mês em que ele entrou, não hoje.
+            DialogoEncerrarFixa(self, rec_id, self._apos)
 
     def _apos(self) -> None:
         self.recarregar()
@@ -1125,7 +1118,11 @@ class JanelaContasFixas(tk.Toplevel):
 
 
 class DialogoReajuste(tk.Toplevel):
-    """Muda o valor de uma conta fixa a partir de um mês escolhido."""
+    """Edita uma conta fixa — inclusive salário — de um mês em diante.
+
+    Serve para o caso real de trocar de emprego: o salário novo é cadastrado
+    como renda fixa, e o antigo se encerra no mês em que parou de entrar.
+    """
 
     def __init__(self, master, recorrencia_id: int, ao_salvar):
         super().__init__(master)
@@ -1133,49 +1130,89 @@ class DialogoReajuste(tk.Toplevel):
         self.recorrencia_id = recorrencia_id
         self.ao_salvar = ao_salvar
         self.rec = db.query_one("SELECT * FROM recorrencia WHERE id = ?", (recorrencia_id,))
-        self.title("Mudar o valor")
+        self.recebe = self.rec["tipo"] == "RECEBER"
+        recebe = self.recebe
+        self.title("Editar renda fixa" if recebe else "Editar conta fixa")
         self.configure(bg=CORES["fundo"])
         self.resizable(False, False)
 
         topo = tk.Frame(self, bg=CORES["superficie"], padx=24, pady=16)
         topo.pack(fill="x")
-        tk.Label(topo, text="Subiu de preço?", bg=CORES["superficie"], fg=CORES["texto"],
+        tk.Label(topo, text="Mudou o valor ou a fonte?" if recebe else "Subiu de preço?",
+                 bg=CORES["superficie"], fg=CORES["texto"],
                  font=(FONTE, 16, "bold"), anchor="w").pack(fill="x")
-        tk.Label(topo, text=f"{self.rec['descricao']} — hoje {services.moeda(self.rec['valor'])}",
+        tk.Label(topo, text=f"{self.rec['descricao']} — hoje"
+                            f" {services.moeda(self.rec['valor'])} todo dia"
+                            f" {self.rec['dia_vencimento']}",
                  bg=CORES["superficie"], fg=CORES["texto_suave"], font=(FONTE, 11),
                  anchor="w").pack(fill="x", pady=(4, 0))
 
         corpo = ttk.Frame(self, padding=20)
         corpo.pack(fill="both", expand=True)
 
-        ttk.Label(corpo, text="Novo valor (R$)", style="Campo.TLabel").grid(
+        ttk.Label(corpo, text="Descrição", style="Campo.TLabel").grid(
             row=0, column=0, sticky="w")
+        self.var_desc = tk.StringVar(value=self.rec["descricao"])
+        ttk.Entry(corpo, textvariable=self.var_desc, width=28).grid(
+            row=1, column=0, sticky="w", pady=(4, 14), padx=(0, 24))
+
+        ttk.Label(corpo, text="Quem paga" if recebe else "Para quem",
+                  style="Campo.TLabel").grid(row=0, column=1, sticky="w")
+        self.var_pessoa = tk.StringVar(value=self.rec["pessoa"] or "")
+        ttk.Entry(corpo, textvariable=self.var_pessoa, width=28).grid(
+            row=1, column=1, sticky="w", pady=(4, 14))
+
+        ttk.Label(corpo, text="Novo valor (R$)", style="Campo.TLabel").grid(
+            row=2, column=0, sticky="w")
         self.cp_valor = CampoValor(corpo, width=16)
         self.cp_valor.set_valor(float(self.rec["valor"]))
-        self.cp_valor.grid(row=1, column=0, sticky="w", pady=(4, 16), padx=(0, 24))
+        self.cp_valor.grid(row=3, column=0, sticky="w", pady=(4, 14), padx=(0, 24))
+
+        ttk.Label(corpo, text="Entra todo dia" if recebe else "Vence todo dia",
+                  style="Campo.TLabel").grid(row=2, column=1, sticky="w")
+        self.var_dia = tk.IntVar(value=int(self.rec["dia_vencimento"]))
+        ttk.Spinbox(corpo, from_=1, to=31, textvariable=self.var_dia, width=6).grid(
+            row=3, column=1, sticky="w", pady=(4, 14))
+
+        ttk.Label(corpo, text="Origem do dinheiro" if recebe else "Categoria do gasto",
+                  style="Campo.TLabel").grid(row=4, column=0, columnspan=2, sticky="w")
+        self.sel_conta = SeletorConta(corpo, tipos=("RECEITA",) if recebe else ("DESPESA",),
+                                      width=50)
+        self.sel_conta.set_conta_id(self.rec["conta_id"])
+        self.sel_conta.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 14))
+
+        ttk.Label(corpo, text="Em qual conta o dinheiro entra?" if recebe
+                              else "De qual conta sai o dinheiro?",
+                  style="Campo.TLabel").grid(row=6, column=0, columnspan=2, sticky="w")
+        self.sel_pagamento = SeletorConta(corpo, tipos=("ATIVO", "PASSIVO"), width=50,
+                                          rotulo_vazio="(decidir na hora)")
+        if self.rec["conta_pagamento_id"]:
+            self.sel_pagamento.set_conta_id(self.rec["conta_pagamento_id"])
+        self.sel_pagamento.grid(row=7, column=0, columnspan=2, sticky="w", pady=(4, 14))
 
         ttk.Label(corpo, text="A partir de qual mês?", style="Campo.TLabel").grid(
-            row=0, column=1, sticky="w")
+            row=8, column=0, sticky="w")
         self.cb_mes = ttk.Combobox(corpo, state="readonly", width=24)
         meses = self._meses_disponiveis()
         self.cb_mes["values"] = [services.mes_nome(m).capitalize() for m in meses]
         self._meses = meses
         self.cb_mes.current(meses.index(services.mes_atual()) if services.mes_atual() in meses
                             else 0)
-        self.cb_mes.grid(row=1, column=1, sticky="w", pady=(4, 16))
+        self.cb_mes.grid(row=9, column=0, sticky="w", pady=(4, 14))
 
-        ttk.Label(corpo, text="Os meses anteriores e todos os que já foram pagos continuam"
-                              " com o valor antigo — seu histórico não muda.",
-                  style="Dica.TLabel", wraplength=460, justify="left").grid(
-            row=2, column=0, columnspan=2, sticky="w", pady=(0, 16))
+        ttk.Label(corpo, text="Os meses anteriores e todos os que já foram"
+                              f" {'recebidos' if recebe else 'pagos'} continuam como estavam"
+                              " — seu histórico não muda.",
+                  style="Dica.TLabel", wraplength=520, justify="left").grid(
+            row=10, column=0, columnspan=2, sticky="w", pady=(0, 14))
 
         botoes = ttk.Frame(corpo)
-        botoes.grid(row=3, column=0, columnspan=2, sticky="e")
-        ttk.Button(botoes, text="Aplicar", style="Primario.TButton",
+        botoes.grid(row=11, column=0, columnspan=2, sticky="e")
+        ttk.Button(botoes, text="Salvar", style="Primario.TButton",
                    command=self.aplicar).pack(side="right")
         ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
 
-        centralizar(self, 560, 340)
+        centralizar(self, 660, 620)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
 
@@ -1189,15 +1226,119 @@ class DialogoReajuste(tk.Toplevel):
         try:
             valor = self.cp_valor.get_valor()
             competencia = self._meses[self.cb_mes.current()]
-            atingidos = services.aplicar_reajuste(self.recorrencia_id, competencia, valor)
+            descricao = self.var_desc.get().strip()
+            if not descricao:
+                raise services.RegraNegocioError("Escreva a descrição.")
+            conta_id = self.sel_conta.get_conta_id()
+            if conta_id is None:
+                raise services.RegraNegocioError(
+                    "Escolha a origem do dinheiro." if self.recebe
+                    else "Escolha a categoria do gasto.")
+            pagamento_id = self.sel_pagamento.get_conta_id()
+            dia = int(self.var_dia.get() or self.rec["dia_vencimento"])
+
+            # A regra passa a valer com os dados novos: os meses que ainda serão
+            # gerados já nascem assim.
+            services.salvar_recorrencia(
+                self.recorrencia_id, self.rec["tipo"], descricao, self.var_pessoa.get(),
+                valor, dia, conta_id, self.rec["centro_custo_id"], self.rec["inicio"],
+                self.rec["fim"], self.rec["observacao"], bool(self.rec["ativo"]),
+                conta_pagamento_id=pagamento_id,
+                pagamento_automatico=bool(self.rec["pagamento_automatico"]))
+            # E os meses já lançados, deste em diante, são corrigidos.
+            atingidos = services.aplicar_reajuste(
+                self.recorrencia_id, competencia, valor, descricao,
+                self.var_pessoa.get().strip(), conta_id)
+            services.aplicar_conta_pagamento(self.recorrencia_id, competencia, pagamento_id)
+            if dia != int(self.rec["dia_vencimento"]):
+                services.ajustar_dia_recorrencia(self.recorrencia_id, dia, competencia)
         except services.RegraNegocioError as erro:
             messagebox.showwarning("Não foi possível", str(erro), parent=self)
             return
         self.ao_salvar()
         messagebox.showinfo(
             "Pronto",
-            f"A partir de {services.mes_nome(competencia)}, o valor passa a ser"
-            f" {services.moeda(valor)}.\n\n{atingidos} mês(es) em aberto foram atualizados.",
+            f"A partir de {services.mes_nome(competencia)}: {descricao},"
+            f" {services.moeda(valor)}, todo dia {dia}.\n\n"
+            f"{atingidos} mês(es) em aberto foram atualizados.", parent=self)
+        self.destroy()
+
+
+class DialogoEncerrarFixa(tk.Toplevel):
+    """Encerra uma conta ou renda fixa a partir do mês escolhido.
+
+    É o caso de trocar de emprego: o salário antigo vai até o último mês em que
+    entrou e some dos meses seguintes, sem apagar o histórico.
+    """
+
+    def __init__(self, master, recorrencia_id: int, ao_salvar):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.recorrencia_id = recorrencia_id
+        self.ao_salvar = ao_salvar
+        self.rec = db.query_one("SELECT * FROM recorrencia WHERE id = ?", (recorrencia_id,))
+        recebe = self.rec["tipo"] == "RECEBER"
+        self.title("Não recebo mais daqui" if recebe else "Encerrar conta fixa")
+        self.configure(bg=CORES["fundo"])
+        self.resizable(False, False)
+
+        topo = tk.Frame(self, bg=CORES["superficie"], padx=24, pady=16)
+        topo.pack(fill="x")
+        tk.Label(topo, text="Até quando entrou?" if recebe else "Até quando foi paga?",
+                 bg=CORES["superficie"], fg=CORES["texto"], font=(FONTE, 16, "bold"),
+                 anchor="w").pack(fill="x")
+        tk.Label(topo, text=f"{self.rec['descricao']} —"
+                            f" {services.moeda(self.rec['valor'])} por mês",
+                 bg=CORES["superficie"], fg=CORES["texto_suave"], font=(FONTE, 11),
+                 anchor="w").pack(fill="x", pady=(4, 0))
+
+        corpo = ttk.Frame(self, padding=20)
+        corpo.pack(fill="both", expand=True)
+        ttk.Label(corpo, text="Último mês em que" + (" entrou" if recebe else " foi paga"),
+                  style="Campo.TLabel").pack(anchor="w")
+        self._meses = self._meses_possiveis()
+        self.cb_mes = ttk.Combobox(corpo, state="readonly", width=28,
+                                   values=[services.mes_nome(m).capitalize()
+                                           for m in self._meses])
+        self.cb_mes.current(len(self._meses) - 1)
+        self.cb_mes.pack(anchor="w", pady=(4, 14))
+
+        ttk.Label(corpo, text="Os meses até aí continuam no histórico, do jeito que foram"
+                              f" {'recebidos' if recebe else 'pagos'}. Os meses seguintes que"
+                              " ainda estão em aberto saem da lista.",
+                  style="Dica.TLabel", wraplength=480, justify="left").pack(anchor="w",
+                                                                            pady=(0, 16))
+
+        botoes = ttk.Frame(corpo)
+        botoes.pack(fill="x")
+        ttk.Button(botoes, text="Encerrar", style="Perigo.TButton",
+                   command=self.aplicar).pack(side="right")
+        ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
+
+        centralizar(self, 580, 380)
+        self.grab_set()
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+    def _meses_possiveis(self) -> list[str]:
+        """Meses já lançados até o atual — não faz sentido encerrar no futuro."""
+        atual = services.mes_atual()
+        meses = sorted({t["competencia"] for t in db.query(
+            "SELECT competencia FROM titulo WHERE recorrencia_id = ?", (self.recorrencia_id,))
+            if t["competencia"] <= atual})
+        return meses or [atual]
+
+    def aplicar(self) -> None:
+        ultimo = self._meses[self.cb_mes.current()]
+        try:
+            removidos = services.encerrar_recorrencia(self.recorrencia_id, ultimo_mes=ultimo)
+        except services.RegraNegocioError as erro:
+            messagebox.showwarning("Não foi possível", str(erro), parent=self)
+            return
+        self.ao_salvar()
+        messagebox.showinfo(
+            "Pronto",
+            f"'{self.rec['descricao']}' vai até {services.mes_nome(ultimo)}.\n\n"
+            f"{removidos} mês(es) seguinte(s) saíram da lista. O histórico continua.",
             parent=self)
         self.destroy()
 

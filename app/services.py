@@ -2210,6 +2210,71 @@ def listar_recorrencias(apenas_ativas: bool = False) -> list[db.sqlite3.Row]:
         " ORDER BY r.ativo DESC, r.descricao")
 
 
+def listar_rendas_fixas(incluir_encerradas: bool = True) -> list[dict]:
+    """As fontes de renda que se repetem todo mês — salário, aluguel, pensão.
+
+    Traz quanto já entrou de cada uma e quando foi a última vez, para a tela de
+    Salários mostrar a história completa mesmo depois de a fonte acabar.
+    """
+    saida = []
+    for rec in listar_recorrencias():
+        if rec["tipo"] != "RECEBER":
+            continue
+        if not incluir_encerradas and not rec["ativo"]:
+            continue
+        recebido = db.query_one(
+            "SELECT COALESCE(SUM(IFNULL(valor_liquidado, valor)),0) AS total,"
+            " COUNT(*) AS vezes FROM titulo"
+            " WHERE recorrencia_id = ? AND status = 'QUITADO'", (rec["id"],))
+        previsto = db.query_one(
+            "SELECT COALESCE(SUM(valor),0) AS total FROM titulo"
+            " WHERE recorrencia_id = ? AND status = 'ABERTO'", (rec["id"],))
+        item = dict(rec)
+        item["recebido"] = round(float(recebido["total"]), 2)
+        item["vezes"] = int(recebido["vezes"])
+        item["a_receber"] = round(float(previsto["total"]), 2)
+        item["encerrada"] = not rec["ativo"]
+        saida.append(item)
+    # Primeiro as que ainda entram, depois as encerradas (mais recentes antes).
+    saida.sort(key=lambda r: (r["encerrada"], -(r["valor"] or 0)))
+    return saida
+
+
+def historico_da_renda(recorrencia_id: int) -> list[dict]:
+    """Mês a mês de uma fonte de renda: o que estava previsto e o que entrou."""
+    linhas = db.query(
+        "SELECT t.*, c.nome AS conta_nome, cp.nome AS conta_entrada"
+        " FROM titulo t LEFT JOIN conta c ON c.id = t.conta_id"
+        " LEFT JOIN conta cp ON cp.id = t.conta_pagamento_id"
+        " WHERE t.recorrencia_id = ? ORDER BY t.competencia DESC, t.id DESC",
+        (recorrencia_id,))
+    saida = []
+    for linha in linhas:
+        recebido = (float(linha["valor_liquidado"]) if linha["valor_liquidado"] is not None
+                    else None)
+        item = dict(linha)
+        item["recebido"] = recebido
+        item["diferenca"] = (round(recebido - float(linha["valor"]), 2)
+                             if recebido is not None else None)
+        saida.append(item)
+    return saida
+
+
+def total_recebido_por_fonte(desde: str, ate: str) -> list[dict]:
+    """Quanto cada fonte de renda trouxe no período (só o que foi recebido)."""
+    linhas = db.query(
+        "SELECT COALESCE(r.descricao, t.descricao) AS fonte,"
+        " t.recorrencia_id, SUM(IFNULL(t.valor_liquidado, t.valor)) AS total,"
+        " COUNT(*) AS vezes FROM titulo t"
+        " LEFT JOIN recorrencia r ON r.id = t.recorrencia_id"
+        " WHERE t.tipo = 'RECEBER' AND t.status = 'QUITADO'"
+        "   AND t.liquidado_em BETWEEN ? AND ?"
+        " GROUP BY fonte ORDER BY total DESC", (desde, ate))
+    return [{"fonte": l["fonte"], "recorrencia_id": l["recorrencia_id"],
+             "total": round(float(l["total"]), 2), "vezes": int(l["vezes"])}
+            for l in linhas]
+
+
 def salvar_recorrencia(
     recorrencia_id: int | None,
     tipo: str,
