@@ -825,14 +825,31 @@ class DialogoTitulo(tk.Toplevel):
         self.quadro_fixa.grid(row=11, column=1, columnspan=2, rowspan=2, sticky="w")
         self.var_fixa = tk.BooleanVar(value=False)
         ttk.Checkbutton(self.quadro_fixa, variable=self.var_fixa, command=self._alternar_fixa,
-                        text="É uma conta fixa: repete todo mês até eu desmarcar").pack(anchor="w")
+                        text="Repete todo mês (conta fixa ou parcelamento)").pack(anchor="w")
         self.linha_fixa = ttk.Frame(self.quadro_fixa)
-        ttk.Label(self.linha_fixa, text="Por", style="Campo.TLabel").pack(side="left")
+        linha_prazo = ttk.Frame(self.linha_fixa)
+        linha_prazo.pack(anchor="w")
+        ttk.Label(linha_prazo, text="Por", style="Campo.TLabel").pack(side="left")
         self.var_meses = tk.IntVar(value=0)
-        ttk.Spinbox(self.linha_fixa, from_=0, to=120, textvariable=self.var_meses,
-                    width=5).pack(side="left", padx=6)
-        ttk.Label(self.linha_fixa, text="meses  (0 = sem prazo, repete até você encerrar)",
+        ttk.Spinbox(linha_prazo, from_=0, to=120, textvariable=self.var_meses, width=5,
+                    command=self._mostrar_parcelas).pack(side="left", padx=6)
+        ttk.Label(linha_prazo, text="parcelas  (0 = sem prazo, repete até você encerrar)",
                   style="Dica.TLabel").pack(side="left")
+
+        # Com prazo, o valor digitado pode ser a parcela ou o total a dividir.
+        self.var_base = tk.StringVar(value="parcela")
+        linha_base = ttk.Frame(self.linha_fixa)
+        linha_base.pack(anchor="w", pady=(6, 0))
+        ttk.Radiobutton(linha_base, variable=self.var_base, value="parcela",
+                        command=self._mostrar_parcelas,
+                        text="o valor acima é de cada parcela").pack(anchor="w")
+        ttk.Radiobutton(linha_base, variable=self.var_base, value="total",
+                        command=self._mostrar_parcelas,
+                        text="o valor acima é o total (dividir pelas parcelas)").pack(
+            anchor="w")
+        self.lbl_parcelas = ttk.Label(self.linha_fixa, style="Secao.TLabel",
+                                      wraplength=420, justify="left")
+        self.lbl_parcelas.pack(anchor="w", pady=(6, 0))
 
         atraso = ttk.Frame(corpo)
         atraso.grid(row=13, column=0, columnspan=3, sticky="w", pady=(0, 12))
@@ -862,8 +879,11 @@ class DialogoTitulo(tk.Toplevel):
                    command=self.salvar).pack(side="right")
         ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
 
+        self.cp_valor.ao_mudar(self._mostrar_parcelas)
+        self.var_meses.trace_add("write", lambda *_: self._mostrar_parcelas())
+
         self._carregar()
-        centralizar(self, 780, 660)
+        centralizar(self, 820, 720)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
 
@@ -878,12 +898,58 @@ class DialogoTitulo(tk.Toplevel):
             text="De qual conta vai sair o dinheiro?" if pagar
                  else "Em qual conta o dinheiro vai entrar?")
 
+    def _valor_da_parcela(self) -> tuple[float, int, float]:
+        """(valor de cada parcela, quantas, sobra de centavos na primeira)."""
+        try:
+            valor = self.cp_valor.get_valor() if self.cp_valor.var.get().strip() else 0.0
+        except Exception:
+            valor = 0.0
+        try:
+            parcelas = int(self.var_meses.get() or 0)
+        except Exception:
+            parcelas = 0
+        if parcelas <= 1 or valor <= 0 or self.var_base.get() != "total":
+            return valor, max(parcelas, 0), 0.0
+        parcela = round(valor / parcelas, 2)
+        sobra = round(valor - parcela * parcelas, 2)
+        return parcela, parcelas, sobra
+
+    def _mostrar_parcelas(self) -> None:
+        """Conta na tela o que vai ser lançado, antes de salvar."""
+        if not hasattr(self, "lbl_parcelas"):
+            return
+        parcela, parcelas, sobra = self._valor_da_parcela()
+        if parcelas <= 0 or parcela <= 0:
+            self.lbl_parcelas.configure(text="")
+            return
+        if parcelas == 1:
+            self.lbl_parcelas.configure(text="Uma parcela só.",
+                                        foreground=CORES["texto_suave"])
+            return
+        total = round(parcela * parcelas + sobra, 2)
+        texto = (f"{parcelas}x de {services.moeda(parcela)}"
+                 f" = {services.moeda(total)} no total.")
+        if abs(sobra) > 0.005:
+            texto += f" A primeira fica {services.moeda(parcela + sobra)} (ajuste dos centavos)."
+        self.lbl_parcelas.configure(text=texto, foreground=CORES["texto"])
+
+    def _ajustar_altura(self) -> None:
+        """A janela cresce quando as opções de parcelas aparecem.
+
+        Sem isso, o quadro empurrava a observação e os botões para fora da tela.
+        """
+        self.update_idletasks()
+        altura = min(max(self.winfo_reqheight(), 660), self.winfo_screenheight() - 80)
+        self.geometry(f"{max(self.winfo_width(), self.winfo_reqwidth())}x{altura}")
+
     def _alternar_fixa(self) -> None:
         # Em conta que já é fixa, o prazo não se escolhe aqui: desmarcar encerra.
         if self.var_fixa.get() and not self.recorrencia_id:
             self.linha_fixa.pack(anchor="w", pady=(6, 0))
+            self._mostrar_parcelas()
         else:
             self.linha_fixa.pack_forget()
+        self._ajustar_altura()
         if self.recorrencia_id and not self.var_fixa.get():
             self.lbl_fixa.configure(
                 text=f"Ao salvar, esta conta deixa de se repetir: {services.mes_nome(self.competencia)}"
@@ -1015,20 +1081,28 @@ class DialogoTitulo(tk.Toplevel):
                 self.destroy()
                 return
 
-            # Nova conta fixa: cria a regra e gera os meses.
+            # Nova conta fixa (ou parcelada): cria a regra e gera os meses.
             if self.titulo_id is None and self.var_fixa.get():
                 base = date.fromisoformat(vencimento)
-                meses = int(self.var_meses.get() or 0)
-                _rec_id, criados = services.criar_conta_fixa(
-                    tipo, descricao, self.var_pessoa.get(), valor, vencimento, conta_id,
+                parcela, meses, sobra = self._valor_da_parcela()
+                rec_id, criados = services.criar_conta_fixa(
+                    tipo, descricao, self.var_pessoa.get(), parcela, vencimento, conta_id,
                     centro_id, observacao, meses, multa_pct=multa, juros_mes_pct=juros,
                     conta_pagamento_id=pagamento_id, pagamento_automatico=automatico)
+                if abs(sobra) > 0.005:
+                    # Divisão que não fecha redonda: os centavos vão na primeira.
+                    services.ajustar_valor_do_mes(rec_id, vencimento[:7],
+                                                  round(parcela + sobra, 2))
                 self.ao_salvar()
+                if meses > 1:
+                    resumo = (f"{meses} parcelas de {services.moeda(parcela)}"
+                              f" = {services.moeda(round(parcela * meses + sobra, 2))},"
+                              f" começando em {services.para_br(vencimento)}.")
+                else:
+                    resumo = (f"'{descricao}' passa a ser gerada todo dia {base.day}."
+                              "\nEla continua até você desmarcar.")
                 messagebox.showinfo(
-                    "Conta fixa criada",
-                    f"'{descricao}' passa a ser gerada todo dia {base.day}.\n\n"
-                    f"{criados} mês(es) já foram lançados."
-                    + ("" if meses else "\nEla continua até você desmarcar."),
+                    "Pronto", f"{resumo}\n\n{criados} mês(es) já foram lançados.",
                     parent=self.master)
                 self.destroy()
                 return
@@ -1275,20 +1349,37 @@ class DialogoReajuste(tk.Toplevel):
         self.cb_mes.current(meses.index(services.mes_atual()) if services.mes_atual() in meses
                             else 0)
         self.cb_mes.grid(row=9, column=0, sticky="w", pady=(4, 14))
+        self.cb_mes.bind("<<ComboboxSelected>>", lambda _e: self._mostrar_diferenca(), add="+")
+
+        # Aumento vale daqui para a frente; mês fora da curva, só nele.
+        self.var_alcance = tk.StringVar(value="daqui")
+        quadro = ttk.Frame(corpo)
+        quadro.grid(row=9, column=1, sticky="w", pady=(4, 14))
+        ttk.Radiobutton(quadro, variable=self.var_alcance, value="daqui",
+                        text="desse mês em diante"
+                             f" ({'aumento' if recebe else 'reajuste'})").pack(anchor="w")
+        ttk.Radiobutton(quadro, variable=self.var_alcance, value="so_este",
+                        text="só nesse mês (foi exceção)").pack(anchor="w")
+
+        self.lbl_diferenca = ttk.Label(corpo, style="Secao.TLabel", wraplength=560,
+                                       justify="left")
+        self.lbl_diferenca.grid(row=10, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        self.cp_valor.ao_mudar(self._mostrar_diferenca)
+        self._mostrar_diferenca()
 
         ttk.Label(corpo, text="Os meses anteriores e todos os que já foram"
                               f" {'recebidos' if recebe else 'pagos'} continuam como estavam"
                               " — seu histórico não muda.",
                   style="Dica.TLabel", wraplength=520, justify="left").grid(
-            row=10, column=0, columnspan=2, sticky="w", pady=(0, 14))
+            row=11, column=0, columnspan=2, sticky="w", pady=(0, 14))
 
         botoes = ttk.Frame(corpo)
-        botoes.grid(row=11, column=0, columnspan=2, sticky="e")
+        botoes.grid(row=12, column=0, columnspan=2, sticky="e")
         ttk.Button(botoes, text="Salvar", style="Primario.TButton",
                    command=self.aplicar).pack(side="right")
         ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
 
-        centralizar(self, 660, 620)
+        centralizar(self, 700, 680)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
 
@@ -1297,6 +1388,36 @@ class DialogoReajuste(tk.Toplevel):
             "SELECT DISTINCT competencia FROM titulo WHERE recorrencia_id = ?"
             " AND status = 'ABERTO' ORDER BY competencia", (self.recorrencia_id,))]
         return meses or [services.mes_atual()]
+
+    def _mostrar_diferenca(self) -> None:
+        """Diz, em reais e em porcentagem, o que a mudança significa."""
+        try:
+            novo = self.cp_valor.get_valor() if self.cp_valor.var.get().strip() else 0.0
+        except Exception:
+            self.lbl_diferenca.configure(text="")
+            return
+        atual = float(self.rec["valor"])
+        diferenca = round(novo - atual, 2)
+        competencia = self._meses[self.cb_mes.current()]
+        if self.var_alcance.get() == "so_este":
+            quantos = 1
+        else:
+            quantos = len([m for m in self._meses if m >= competencia])
+
+        if abs(diferenca) < 0.005:
+            self.lbl_diferenca.configure(
+                text=f"Mesmo valor de hoje ({services.moeda(atual)}).",
+                foreground=CORES["texto_suave"])
+            return
+        pct = round(diferenca / atual * 100, 1) if atual > 0.005 else 0.0
+        sentido = "aumento" if diferenca > 0 else "queda"
+        self.lbl_diferenca.configure(
+            text=f"{sentido.capitalize()} de {services.moeda(abs(diferenca))}"
+                 f" ({pct:+.1f}%): de {services.moeda(atual)} para"
+                 f" {services.moeda(novo)}. Vai valer em {quantos} mês(es),"
+                 f" a partir de {services.mes_nome(competencia)}.",
+            foreground=CORES["sucesso"] if (diferenca > 0) == self.recebe
+            else CORES["alerta"])
 
     def aplicar(self) -> None:
         try:
@@ -1312,6 +1433,18 @@ class DialogoReajuste(tk.Toplevel):
                     else "Escolha a categoria do gasto.")
             pagamento_id = self.sel_pagamento.get_conta_id()
             dia = int(self.var_dia.get() or self.rec["dia_vencimento"])
+
+            # Mês fora da curva: corrige só aquele mês e a regra fica como está.
+            if self.var_alcance.get() == "so_este":
+                services.ajustar_valor_do_mes(self.recorrencia_id, competencia, valor)
+                self.ao_salvar()
+                messagebox.showinfo(
+                    "Pronto",
+                    f"{services.mes_nome(competencia).capitalize()} passa a ser"
+                    f" {services.moeda(valor)}.\n\nOs outros meses continuam em"
+                    f" {services.moeda(self.rec['valor'])}.", parent=self)
+                self.destroy()
+                return
 
             # A regra passa a valer com os dados novos: os meses que ainda serão
             # gerados já nascem assim.

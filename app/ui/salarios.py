@@ -52,7 +52,8 @@ class Salarios(ttk.Frame):
         acoes = ttk.Frame(corpo)
         acoes.grid(row=1, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(acoes, text="Para a fonte selecionada:", style="Dica.TLabel").pack(side="left")
-        ttk.Button(acoes, text="Editar", command=self.editar).pack(side="left", padx=8)
+        ttk.Button(acoes, text="Mudar valor / aumento", style="Primario.TButton",
+                   command=self.editar).pack(side="left", padx=8)
         ttk.Button(acoes, text="Histórico", command=self.historico).pack(side="left")
         ttk.Button(acoes, text="Pausar / voltar",
                    command=self.alternar).pack(side="left", padx=8)

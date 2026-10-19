@@ -382,6 +382,8 @@ class Configuracoes(ttk.Frame):
         os.startfile(str(DB_PATH.parent))  # noqa: S606 - abre o Explorador do Windows
 
     def verificar(self) -> None:
+        # Índice quebrado tem conserto: reconstruir antes de dar o diagnóstico.
+        reparado = db.reparar_indices()
         resultado = db.query_one("PRAGMA integrity_check")
         estado = resultado[0] if resultado else "desconhecido"
         db.compactar()
@@ -390,10 +392,12 @@ class Configuracoes(ttk.Frame):
                       else f"Há uma diferença de {services.moeda(balanco['diferenca'])} entre o"
                            " que você tem e o que está registrado. Confira os saldos iniciais.")
         self.recarregar()
+        reparo = ("\n\nUm índice estava fora de sincronia e foi reconstruído —"
+                  " nenhum registro se perdeu." if reparado else "")
         messagebox.showinfo(
             "Conferência",
-            f"Arquivo de dados: {'sem problemas' if estado == 'ok' else estado}\n\n{equilibrio}",
-            parent=self)
+            f"Arquivo de dados: {'sem problemas' if estado == 'ok' else estado}"
+            f"{reparo}\n\n{equilibrio}", parent=self)
 
     def exportar_lancamentos(self) -> None:
         ensure_dirs()

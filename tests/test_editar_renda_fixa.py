@@ -89,6 +89,57 @@ def test_salario_novo_convive_com_o_antigo(sistema, contas, salario):
     assert len(titulos(sistema, novo)) > 1
 
 
+def test_aumento_vale_para_os_meses_seguintes(sistema, contas, salario):
+    mes = sistema.mes_atual()
+    sistema.aplicar_reajuste(salario, mes, 5400.0)
+
+    valores = {t["competencia"]: t["valor"] for t in titulos(sistema, salario)}
+    assert set(valores.values()) == {5400.0}
+
+
+def test_aumento_a_partir_de_um_mes_futuro_preserva_os_antes(sistema, salario):
+    meses = [t["competencia"] for t in titulos(sistema, salario)]
+    terceiro = meses[2]
+
+    sistema.aplicar_reajuste(salario, terceiro, 6000.0)
+
+    valores = {t["competencia"]: t["valor"] for t in titulos(sistema, salario)}
+    assert valores[meses[0]] == 1200.0        # antes do aumento
+    assert valores[meses[1]] == 1200.0
+    assert valores[terceiro] == 6000.0        # daqui em diante
+    assert valores[meses[-1]] == 6000.0
+
+
+def test_mes_fora_da_curva_muda_so_aquele_mes(sistema, salario):
+    """13º, adiantamento, desconto pontual: o combinado segue valendo."""
+    meses = [t["competencia"] for t in titulos(sistema, salario)]
+    escolhido = meses[2]
+
+    atingidos = sistema.ajustar_valor_do_mes(salario, escolhido, 2400.0)
+
+    assert atingidos == 1
+    valores = {t["competencia"]: t["valor"] for t in titulos(sistema, salario)}
+    assert valores[escolhido] == 2400.0
+    assert valores[meses[1]] == 1200.0
+    assert valores[meses[-1]] == 1200.0
+    regra = sistema.db.query_one("SELECT valor FROM recorrencia WHERE id = ?", (salario,))
+    assert regra["valor"] == 1200.0           # a regra não muda
+
+
+def test_mes_ja_recebido_nao_aceita_correcao_pontual(sistema, contas, salario):
+    primeiro = titulos(sistema, salario)[0]
+    sistema.baixar_titulo(primeiro["id"], primeiro["vencimento"], 1200.0, contas["banco"])
+
+    with pytest.raises(sistema.RegraNegocioError):
+        sistema.ajustar_valor_do_mes(salario, primeiro["competencia"], 9999.0)
+
+
+def test_valor_invalido_e_recusado(sistema, salario):
+    mes = sistema.mes_atual()
+    with pytest.raises(sistema.RegraNegocioError):
+        sistema.ajustar_valor_do_mes(salario, mes, 0.0)
+
+
 def test_pausar_e_reativar_a_renda(sistema, salario):
     sistema.pausar_recorrencia(salario)
     assert sistema.db.query_one("SELECT ativo FROM recorrencia WHERE id = ?",

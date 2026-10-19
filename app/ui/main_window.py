@@ -126,6 +126,13 @@ class Aplicacao(tk.Tk):
                 texto_auto = (f"Débito automático: {len(automaticos['pagos'])} conta(s)"
                               f" paga(s) — {services.moeda(total)}.")
                 self.after(1300, lambda t=texto_auto: self.notificar(t))
+            # Índice fora de sincronia faz gasto de uma categoria aparecer em
+            # outra; conferir na abertura é barato e evita número errado na tela.
+            problema = db.reparar_indices()
+            if problema:
+                self.after(900, lambda: self.notificar(
+                    "Encontrei um índice fora de sincronia no arquivo de dados e já"
+                    " reconstruí. Seus registros estão todos lá."))
             services.conferir_automatico()
             encargos = services.lancar_encargos_do_mes()
             if encargos:

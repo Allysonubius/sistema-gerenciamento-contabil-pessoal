@@ -2358,6 +2358,9 @@ def gerar_titulos_recorrentes(ate_meses: int = MESES_GERADOS_A_FRENTE,
 
     criados = 0
     for rec in db.query("SELECT * FROM recorrencia WHERE ativo = 1"):
+        # Com prazo definido, cada mês é uma parcela: a descrição numera (3/10)
+        # para você saber quanto já andou e quanto falta.
+        total_parcelas = _parcelas_da_recorrencia(rec)
         existentes = {t["competencia"] for t in db.query(
             "SELECT competencia FROM titulo WHERE recorrencia_id = ?", (rec["id"],))}
         competencia = max(rec["inicio"], _competencia_minima(rec, existentes))
@@ -2370,7 +2373,8 @@ def gerar_titulos_recorrentes(ate_meses: int = MESES_GERADOS_A_FRENTE,
                     " conta_id, centro_custo_id, observacao, recorrencia_id,"
                     " multa_pct, juros_mes_pct, conta_pagamento_id, pagamento_automatico)"
                     " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (rec["tipo"], rec["descricao"], rec["pessoa"], rec["valor"],
+                    (rec["tipo"], _descricao_da_parcela(rec, competencia, total_parcelas),
+                     rec["pessoa"], rec["valor"],
                      date(ano, mes, dia).isoformat(), competencia, rec["conta_id"],
                      rec["centro_custo_id"], rec["observacao"], rec["id"],
                      rec["multa_pct"] or 0, rec["juros_mes_pct"] or 0,
@@ -2378,6 +2382,30 @@ def gerar_titulos_recorrentes(ate_meses: int = MESES_GERADOS_A_FRENTE,
                 criados += 1
             competencia = _mes_seguinte(competencia)
     return criados
+
+
+def _meses_entre(inicio: str, fim: str) -> int:
+    """Quantos meses de `inicio` até `fim`, contando os dois."""
+    ano_i, mes_i = (int(p) for p in inicio[:7].split("-"))
+    ano_f, mes_f = (int(p) for p in fim[:7].split("-"))
+    return (ano_f * 12 + mes_f) - (ano_i * 12 + mes_i) + 1
+
+
+def _parcelas_da_recorrencia(rec) -> int:
+    """Total de parcelas quando a conta tem prazo; 0 quando é sem fim."""
+    if not rec["fim"]:
+        return 0
+    return max(_meses_entre(rec["inicio"], rec["fim"]), 0)
+
+
+def _descricao_da_parcela(rec, competencia: str, total: int) -> str:
+    """'Notebook' vira 'Notebook (3/10)' quando a conta tem prazo."""
+    if total <= 1:
+        return rec["descricao"]
+    numero = _meses_entre(rec["inicio"], competencia)
+    if numero < 1 or numero > total:
+        return rec["descricao"]
+    return f"{rec['descricao']} ({numero}/{total})"
 
 
 def _competencia_minima(rec: db.sqlite3.Row, existentes: set[str]) -> str:
@@ -2499,6 +2527,24 @@ def pagar_automaticos(hoje: str | None = None) -> dict:
                       "vencimento": titulo["vencimento"], "valor": devido,
                       "conta": titulo["conta_pagamento_id"]})
     return {"pagos": pagos, "pendentes": pendentes}
+
+
+def ajustar_valor_do_mes(recorrencia_id: int, competencia: str, valor: float) -> int:
+    """Muda o valor de um único mês da conta fixa, sem mexer na regra.
+
+    É o caso do mês fora da curva — adiantamento, 13º, desconto pontual: o valor
+    combinado continua valendo para os outros meses.
+    """
+    if valor <= 0:
+        raise RegraNegocioError("O valor deve ser maior que zero.")
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            "UPDATE titulo SET valor = ? WHERE recorrencia_id = ? AND competencia = ?"
+            " AND status = 'ABERTO'", (round(valor, 2), recorrencia_id, competencia[:7]))
+    if not cursor.rowcount:
+        raise RegraNegocioError(
+            f"{mes_nome(competencia)} não tem nenhum mês em aberto para corrigir.")
+    return cursor.rowcount
 
 
 def aplicar_conta_pagamento(recorrencia_id: int, competencia_base: str,
@@ -2658,6 +2704,10 @@ def tornar_recorrente(titulo_id: int, meses: int = 0) -> int:
         pagamento_automatico=bool(titulo["pagamento_automatico"]))
     db.execute("UPDATE titulo SET recorrencia_id = ?, competencia = ? WHERE id = ?",
                (recorrencia_id, competencia, titulo_id))
+    if meses > 1:
+        # O título que virou a primeira parcela também ganha o "(1/N)".
+        db.execute("UPDATE titulo SET descricao = ? WHERE id = ?",
+                   (f"{titulo['descricao']} (1/{meses})", titulo_id))
     return gerar_titulos_recorrentes()
 
 
@@ -3301,9 +3351,70 @@ def teto_da_categoria(conta_id: int, competencia: str) -> tuple[float, bool]:
     return (round(float(padrao["valor"]), 2), False) if padrao else (0.0, False)
 
 
+DIAS_MINIMOS_PARA_RITMO = 5     # antes disso o mês é curto demais para extrapolar
+
+# O orçamento se guia pelo mês passado: é o retrato mais próximo da vida de
+# agora. Olhar meio ano para trás trazia valores de uma realidade que já mudou.
+MESES_BASE_ORCAMENTO = 1
+
+
+def _historico_da_categoria(conta_id: int, ate_competencia: str,
+                            meses: int = MESES_BASE_ORCAMENTO) -> dict:
+    """Quanto a categoria costuma consumir, olhando os meses fechados.
+
+    Devolve média, mediana e quantas vezes o teto foi estourado. A mediana é o
+    número honesto: um mês atípico (a viagem, o conserto do carro) puxa a média
+    para cima e faria o orçamento inteiro mentir.
+    """
+    anteriores = [m for m in meses_do_historico() if m < ate_competencia][-meses:]
+    valores, estouros = [], 0
+    for competencia in anteriores:
+        ano, mes = (int(p) for p in competencia.split("-"))
+        row = db.query_one(
+            "SELECT COALESCE(SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END),0) AS t"
+            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+            " WHERE p.conta_id = ? AND l.data BETWEEN ? AND ?",
+            (conta_id, f"{competencia}-01",
+             date(ano, mes, _ultimo_dia(ano, mes)).isoformat()))
+        gasto = round(float(row["t"]), 2)
+        valores.append(gasto)
+        teto_do_mes, _ = teto_da_categoria(conta_id, competencia)
+        if teto_do_mes > 0 and gasto > teto_do_mes + CENTAVO:
+            estouros += 1
+
+    usados = [v for v in valores if v > CENTAVO]
+    if usados:
+        ordenados = sorted(usados)
+        meio = len(ordenados) // 2
+        mediana = (ordenados[meio] if len(ordenados) % 2
+                   else round((ordenados[meio - 1] + ordenados[meio]) / 2, 2))
+        media = round(sum(usados) / len(usados), 2)
+    else:
+        mediana = media = 0.0
+    # Média contando os meses sem gasto: é a única que pode ser somada entre
+    # categorias sem inflar o total. Gasto que acontece de vez em quando não
+    # pode entrar na projeção como se fosse todo mês.
+    esperado = round(sum(valores) / len(valores), 2) if valores else 0.0
+    return {"media": media, "mediana": round(mediana, 2), "esperado": esperado,
+            "meses": len(valores), "meses_com_gasto": len(usados), "estouros": estouros}
+
+
+def _comprometido_do_mes(inicio: str, fim: str) -> dict[int, float]:
+    """O que já está contratado no mês e ainda não foi pago, por categoria.
+
+    Conta fixa, boleto e parcela em aberto são gasto certo: deixá-los de fora
+    fazia o "ainda posso gastar" prometer um dinheiro que já tem dono.
+    """
+    return {row["conta_id"]: round(float(row["total"]), 2) for row in db.query(
+        "SELECT t.conta_id, SUM(t.valor) AS total FROM titulo t"
+        " JOIN conta c ON c.id = t.conta_id"
+        " WHERE t.tipo = 'PAGAR' AND t.status = 'ABERTO' AND c.tipo = 'DESPESA'"
+        "   AND t.vencimento BETWEEN ? AND ? GROUP BY t.conta_id", (inicio, fim))}
+
+
 def orcamento_do_mes(competencia: str | None = None,
                      incluir_sem_teto: bool = True) -> list[dict]:
-    """Previsto × gasto de cada categoria de despesa no mês."""
+    """Previsto × gasto × comprometido de cada categoria de despesa no mês."""
     competencia = competencia or mes_atual()
     inicio = f"{competencia}-01"
     ano, mes = (int(p) for p in competencia.split("-"))
@@ -3323,18 +3434,45 @@ def orcamento_do_mes(competencia: str | None = None,
         " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
         " JOIN conta c ON c.id = p.conta_id"
         " WHERE c.tipo='DESPESA' AND l.data BETWEEN ? AND ? GROUP BY c.id", (inicio, fim))}
+    # O que veio de baixa de conta a pagar é gasto certo, não ritmo do dia a dia.
+    fixos_pagos = {row["id"]: round(float(row["total"]), 2) for row in db.query(
+        "SELECT c.id, SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS total"
+        " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+        " JOIN conta c ON c.id = p.conta_id"
+        " WHERE c.tipo='DESPESA' AND l.origem = 'BAIXA' AND l.data BETWEEN ? AND ?"
+        " GROUP BY c.id", (inicio, fim))}
+    comprometidos = _comprometido_do_mes(inicio, fim)
 
     linhas = []
     for conta in db.query("SELECT * FROM conta WHERE tipo='DESPESA' AND aceita_lancamento=1"
                           " AND ativo=1 ORDER BY codigo"):
         teto, ajustado = teto_da_categoria(conta["id"], competencia)
         gasto = gastos.get(conta["id"], 0.0)
-        if teto <= 0 and gasto <= CENTAVO and not incluir_sem_teto:
+        comprometido = comprometidos.get(conta["id"], 0.0)
+        if teto <= 0 and gasto <= CENTAVO and comprometido <= CENTAVO:
             continue
-        if teto <= 0 and gasto <= CENTAVO:
+        if teto <= 0 and not incluir_sem_teto:
             continue
+
+        historico = _historico_da_categoria(conta["id"], competencia)
+        variavel = round(max(gasto - fixos_pagos.get(conta["id"], 0.0), 0.0), 2)
+
+        # Projeção = o que já saiu + o que está contratado + a estimativa do que
+        # ainda se gasta no dia a dia. Mês que nem começou não tem ritmo nenhum:
+        # ali vale só o que já está agendado, senão a conta vira ficção.
+        if dias_restantes <= 0 or dias_corridos <= 0:
+            estimado = 0.0
+        elif dias_corridos >= DIAS_MINIMOS_PARA_RITMO and variavel > CENTAVO:
+            estimado = round(variavel / dias_corridos * dias_restantes, 2)
+        else:
+            # Começo de mês: o histórico esperado da categoria, proporcional ao
+            # que falta — já descontando o que ela consumiu até aqui.
+            esperado = max(historico["esperado"] - variavel, 0.0)
+            estimado = round(esperado * dias_restantes / dias_no_mes, 2)
+
+        projecao = round(gasto + comprometido + estimado, 2)
         restante = round(teto - gasto, 2) if teto > 0 else 0.0
-        ritmo = round(gasto / dias_corridos * dias_no_mes, 2) if dias_corridos else 0.0
+        livre = round(teto - gasto - comprometido, 2) if teto > 0 else 0.0
         linhas.append({
             "conta_id": conta["id"],
             "codigo": conta["codigo"],
@@ -3342,53 +3480,191 @@ def orcamento_do_mes(competencia: str | None = None,
             "teto": teto,
             "ajuste_do_mes": ajustado,
             "gasto": gasto,
+            "comprometido": comprometido,
             "restante": restante,
+            "livre": livre,
             "percentual": round(gasto / teto * 100, 1) if teto > 0 else 0.0,
-            "projecao": ritmo,
+            "percentual_com_comprometido": (round((gasto + comprometido) / teto * 100, 1)
+                                            if teto > 0 else 0.0),
+            "projecao": projecao,
+            "media_historica": historico["media"],
+            "mediana_historica": historico["mediana"],
+            "meses_historico": historico["meses_com_gasto"],
+            "estouros_anteriores": historico["estouros"],
             "estourou": teto > 0 and gasto > teto + CENTAVO,
-            "risco": teto > 0 and not gasto > teto and ritmo > teto + CENTAVO,
-            "por_dia_restante": (round(restante / dias_restantes, 2)
-                                 if teto > 0 and dias_restantes > 0 and restante > 0 else 0.0),
+            "risco": teto > 0 and not gasto > teto and projecao > teto + CENTAVO,
+            "por_dia_restante": (round(livre / dias_restantes, 2)
+                                 if teto > 0 and dias_restantes > 0 and livre > 0 else 0.0),
         })
     return sorted(linhas, key=lambda x: (-x["teto"], -x["gasto"]))
 
 
+def renda_do_mes(competencia: str | None = None) -> dict:
+    """O que entra no mês: o que já caiu mais o que ainda está previsto.
+
+    É a âncora do orçamento — planejar sem saber quanto entra é adivinhação.
+    """
+    competencia = competencia or mes_atual()
+    ano, mes = (int(p) for p in competencia.split("-"))
+    inicio = f"{competencia}-01"
+    fim = date(ano, mes, _ultimo_dia(ano, mes)).isoformat()
+
+    recebido = db.query_one(
+        "SELECT COALESCE(SUM(CASE WHEN p.tipo='C' THEN p.valor ELSE -p.valor END),0) AS t"
+        " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+        " JOIN conta c ON c.id = p.conta_id"
+        " WHERE c.tipo = 'RECEITA' AND l.data BETWEEN ? AND ?", (inicio, fim))["t"]
+    a_receber = db.query_one(
+        "SELECT COALESCE(SUM(valor),0) AS t FROM titulo WHERE tipo = 'RECEBER'"
+        " AND status = 'ABERTO' AND vencimento BETWEEN ? AND ?", (inicio, fim))["t"]
+    recebido, a_receber = round(float(recebido), 2), round(float(a_receber), 2)
+    return {"recebido": recebido, "a_receber": a_receber,
+            "total": round(recebido + a_receber, 2)}
+
+
 def resumo_orcamento(competencia: str | None = None) -> dict:
+    competencia = competencia or mes_atual()
     linhas = orcamento_do_mes(competencia)
     com_teto = [l for l in linhas if l["teto"] > 0]
     previsto = round(sum(l["teto"] for l in com_teto), 2)
     gasto_com_teto = round(sum(l["gasto"] for l in com_teto), 2)
     gasto_total = round(sum(l["gasto"] for l in linhas), 2)
+    comprometido = round(sum(l["comprometido"] for l in linhas), 2)
+    projecao = round(sum(l["projecao"] for l in linhas), 2)
+    renda = renda_do_mes(competencia)
+
     return {
         "previsto": previsto,
         "gasto": gasto_com_teto,
         "gasto_total": gasto_total,
+        "comprometido": comprometido,
         "sem_teto": round(gasto_total - gasto_com_teto, 2),
         "restante": round(previsto - gasto_com_teto, 2),
+        # O que ainda dá para gastar depois de descontar o que já tem dono.
+        "livre": round(previsto - gasto_com_teto - sum(l["comprometido"] for l in com_teto), 2),
         "percentual": round(gasto_com_teto / previsto * 100, 1) if previsto else 0.0,
+        "projecao": projecao,
+        "renda": renda,
+        # Quanto do que entra no mês já está planejado para sair.
+        "percentual_da_renda": (round(previsto / renda["total"] * 100, 1)
+                                if renda["total"] > CENTAVO else 0.0),
+        "sobra_prevista": round(renda["total"] - projecao, 2),
+        # O número que importa para segurar o gasto: o que ainda dá para gastar
+        # sem fechar o mês no vermelho, já descontado o que tem dono.
+        "limite_ate_o_fim": round(max(renda["total"] - gasto_total - comprometido, 0.0), 2),
         "estouradas": [l for l in linhas if l["estourou"]],
         "em_risco": [l for l in linhas if l["risco"]],
+        "sem_teto_relevantes": [l for l in linhas if l["teto"] <= 0
+                                and l["gasto"] + l["comprometido"] > CENTAVO],
         "categorias": linhas,
     }
 
 
-def sugerir_orcamento(conta_id: int, meses: int = 3) -> float:
-    """Média gasta na categoria nos últimos meses fechados."""
-    historico = meses_do_historico()
-    anteriores = [m for m in historico if m < mes_atual()][-meses:]
-    if not anteriores:
-        return 0.0
-    total = 0.0
-    for competencia in anteriores:
-        ano, mes = (int(p) for p in competencia.split("-"))
-        row = db.query_one(
-            "SELECT COALESCE(SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END),0) AS t"
-            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
-            " WHERE p.conta_id = ? AND l.data BETWEEN ? AND ?",
-            (conta_id, f"{competencia}-01",
-             date(ano, mes, _ultimo_dia(ano, mes)).isoformat()))
-        total += float(row["t"])
-    return round(max(total / len(anteriores), 0.0), 2)
+def plano_sugerido(competencia: str | None = None, meses: int = MESES_BASE_ORCAMENTO,
+                   folga_pct: float = 10.0) -> dict:
+    """Propõe quanto gastar em cada categoria para o mês caber na renda.
+
+    A base é o **mês anterior**: o retrato mais próximo de como você vive agora.
+    O que já está contratado (conta fixa, boleto lançado) não entra na conta de
+    corte — ele é piso, não escolha.
+
+    Quando nem o mínimo cabe na renda, o plano corta os variáveis na mesma
+    proporção e avisa que o buraco é estrutural.
+    """
+    competencia = competencia or mes_atual()
+    ano, mes = (int(p) for p in competencia.split("-"))
+    inicio, fim = f"{competencia}-01", date(ano, mes, _ultimo_dia(ano, mes)).isoformat()
+    renda = renda_do_mes(competencia)["total"]
+    comprometidos = _comprometido_do_mes(inicio, fim)
+
+    anteriores = [m for m in meses_do_historico() if m < competencia][-meses:]
+    linhas = []
+    for conta in db.query("SELECT * FROM conta WHERE tipo='DESPESA' AND aceita_lancamento=1"
+                          " AND ativo=1 ORDER BY codigo"):
+        gastos = []
+        for anterior in anteriores:
+            ano_a, mes_a = (int(p) for p in anterior.split("-"))
+            row = db.query_one(
+                "SELECT COALESCE(SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END),0)"
+                " AS t FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+                " WHERE p.conta_id = ? AND l.data BETWEEN ? AND ?",
+                (conta["id"], f"{anterior}-01",
+                 date(ano_a, mes_a, _ultimo_dia(ano_a, mes_a)).isoformat()))
+            gastos.append(round(float(row["t"]), 2))
+
+        com_gasto = [g for g in gastos if g > CENTAVO]
+        fixo = comprometidos.get(conta["id"], 0.0)
+        if not com_gasto and fixo <= CENTAVO:
+            continue
+        minimo = min(com_gasto) if com_gasto else 0.0
+        tipico = (round(sum(com_gasto) / len(com_gasto), 2) if com_gasto else 0.0)
+        linhas.append({
+            "conta_id": conta["id"],
+            "nome": conta["nome"],
+            "fixo": fixo,
+            "minimo": round(minimo, 2),
+            "tipico": tipico,
+            # O que dá para cortar é só a parte variável acima do contratado.
+            "variavel": round(max(minimo - fixo, 0.0), 2),
+            "teto_atual": teto_da_categoria(conta["id"], competencia)[0],
+        })
+
+    total_fixo = round(sum(l["fixo"] for l in linhas), 2)
+    total_variavel = round(sum(l["variavel"] for l in linhas), 2)
+    # Sobra desejada: uma folga da renda que não deveria ser gasta.
+    alvo_gasto = round(max(renda * (1 - folga_pct / 100), 0.0), 2) if renda > CENTAVO else 0.0
+    disponivel_variavel = round(max(alvo_gasto - total_fixo, 0.0), 2)
+
+    if renda <= CENTAVO or total_variavel <= CENTAVO:
+        fator = 1.0
+    elif total_variavel > disponivel_variavel:
+        fator = round(disponivel_variavel / total_variavel, 4)      # nem o mínimo cabe
+    else:
+        fator = 1.0
+
+    for linha in linhas:
+        sugerido = round(linha["fixo"] + linha["variavel"] * fator, 2)
+        linha["sugerido"] = sugerido
+        linha["percentual_renda"] = (round(sugerido / renda * 100, 1)
+                                     if renda > CENTAVO else 0.0)
+        linha["corte"] = round(linha["teto_atual"] - sugerido, 2) if linha["teto_atual"] else 0.0
+
+    linhas.sort(key=lambda l: -l["sugerido"])
+    total_sugerido = round(sum(l["sugerido"] for l in linhas), 2)
+    return {
+        "competencia": competencia,
+        "renda": renda,
+        "categorias": linhas,
+        "total_fixo": total_fixo,
+        "total_sugerido": total_sugerido,
+        "sobra": round(renda - total_sugerido, 2),
+        "percentual_da_renda": (round(total_sugerido / renda * 100, 1)
+                                if renda > CENTAVO else 0.0),
+        "aperta": fator < 1.0,          # nem gastando o mínimo histórico cabe
+        "fator": fator,
+    }
+
+
+def aplicar_plano_sugerido(competencia: str | None = None, so_este_mes: bool = False,
+                           meses: int = MESES_BASE_ORCAMENTO) -> int:
+    """Grava os tetos do plano. Sem ``so_este_mes``, valem para todos os meses."""
+    plano = plano_sugerido(competencia, meses)
+    alvo = (competencia or mes_atual()) if so_este_mes else ""
+    for linha in plano["categorias"]:
+        definir_orcamento(linha["conta_id"], linha["sugerido"], alvo)
+    return len(plano["categorias"])
+
+
+def sugerir_orcamento(conta_id: int, meses: int = MESES_BASE_ORCAMENTO,
+                      metodo: str = "mediana") -> float:
+    """Teto sugerido para a categoria, a partir do mês anterior.
+
+    Com mais de um mês de base, a mediana é quem manda: a média sozinha é
+    distorcida por um mês atípico.
+    """
+    historico = _historico_da_categoria(conta_id, mes_atual(), meses)
+    valor = historico["media"] if metodo == "media" else historico["mediana"]
+    return round(max(valor, 0.0), 2)
 
 
 # --------------------------------------------------------------------------- #

@@ -1,6 +1,7 @@
 """Camada de acesso ao SQLite: conexão, esquema, migrações e carga inicial."""
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import sqlite3
@@ -812,6 +813,30 @@ def restaurar_backup(origem: Path) -> None:
 def compactar() -> None:
     with _lock:
         get_connection().execute("VACUUM")
+
+
+def reparar_indices() -> str | None:
+    """Conserta índices quebrados do SQLite, se houver algum.
+
+    Um índice fora de sincronia faz consultas filtradas devolverem linhas de
+    outra conta — na prática, gasto de uma categoria aparecendo em outra. O
+    conteúdo das tabelas não se perde: basta reconstruir os índices.
+
+    Devolve o problema encontrado (texto do SQLite) ou None quando está tudo bem.
+    """
+    with _lock:
+        conexao = get_connection()
+        resultado = conexao.execute("PRAGMA quick_check").fetchone()
+        estado = resultado[0] if resultado else "ok"
+        if estado == "ok":
+            return None
+        logging.warning("Banco com índice inconsistente: %s — reconstruindo", estado)
+        conexao.execute("REINDEX")
+        conexao.commit()
+        depois = conexao.execute("PRAGMA quick_check").fetchone()
+        if depois and depois[0] != "ok":
+            logging.error("Reconstrução não resolveu: %s", depois[0])
+        return estado
 
 
 def fechar() -> None:
