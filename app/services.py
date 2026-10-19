@@ -2384,6 +2384,11 @@ def gerar_titulos_recorrentes(ate_meses: int = MESES_GERADOS_A_FRENTE,
     return criados
 
 
+def meses_entre(inicio: str, fim: str) -> int:
+    """Quantos meses de uma data a outra, contando o primeiro e o último."""
+    return _meses_entre(inicio, fim)
+
+
 def _meses_entre(inicio: str, fim: str) -> int:
     """Quantos meses de `inicio` até `fim`, contando os dois."""
     ano_i, mes_i = (int(p) for p in inicio[:7].split("-"))

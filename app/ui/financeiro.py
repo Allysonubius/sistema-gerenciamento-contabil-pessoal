@@ -774,9 +774,11 @@ class DialogoTitulo(tk.Toplevel):
         self.cb_tipo.grid(row=1, column=0, sticky="w", pady=(3, 9), padx=(0, 16))
         self.cb_tipo.bind("<<ComboboxSelected>>", lambda _e: self._ajustar_categorias())
 
-        ttk.Label(corpo, text="Vence em", style="Campo.TLabel").grid(row=0, column=1, sticky="w")
+        ttk.Label(corpo, text="Vence em (1ª parcela)", style="Campo.TLabel").grid(
+            row=0, column=1, sticky="w")
         self.dt_venc = CampoData(corpo, services.hoje_iso())
         self.dt_venc.grid(row=1, column=1, sticky="w", pady=(3, 9), padx=(0, 16))
+        self.dt_venc.var.trace_add("write", lambda *_: self._mostrar_parcelas())
 
         ttk.Label(corpo, text="Valor (R$)", style="Campo.TLabel").grid(row=0, column=2, sticky="w")
         self.cp_valor = CampoValor(corpo, width=16)
@@ -827,13 +829,27 @@ class DialogoTitulo(tk.Toplevel):
         ttk.Checkbutton(self.quadro_fixa, variable=self.var_fixa, command=self._alternar_fixa,
                         text="Repete todo mês (conta fixa ou parcelamento)").pack(anchor="w")
         self.linha_fixa = ttk.Frame(self.quadro_fixa)
+        # Dois jeitos de dizer o prazo: quantas parcelas, ou até quando pagar.
+        self.var_prazo = tk.StringVar(value="parcelas")
         linha_prazo = ttk.Frame(self.linha_fixa)
         linha_prazo.pack(anchor="w")
-        ttk.Label(linha_prazo, text="Por", style="Campo.TLabel").pack(side="left")
+        ttk.Radiobutton(linha_prazo, variable=self.var_prazo, value="parcelas",
+                        command=self._mostrar_parcelas, text="Por").pack(side="left")
         self.var_meses = tk.IntVar(value=0)
         ttk.Spinbox(linha_prazo, from_=0, to=120, textvariable=self.var_meses, width=5,
                     command=self._mostrar_parcelas).pack(side="left", padx=6)
-        ttk.Label(linha_prazo, text="parcelas  (0 = sem prazo, repete até você encerrar)",
+        ttk.Label(linha_prazo, text="parcelas  (0 = sem prazo, repete até encerrar)",
+                  style="Dica.TLabel").pack(side="left")
+
+        linha_ate = ttk.Frame(self.linha_fixa)
+        linha_ate.pack(anchor="w", pady=(4, 0))
+        ttk.Radiobutton(linha_ate, variable=self.var_prazo, value="ate",
+                        command=self._mostrar_parcelas,
+                        text="Até a última em").pack(side="left")
+        self.dt_ate = CampoData(linha_ate, services.hoje_iso())
+        self.dt_ate.pack(side="left", padx=6)
+        self.dt_ate.var.trace_add("write", lambda *_: self._mostrar_parcelas())
+        ttk.Label(linha_ate, text="(divide o valor entre os meses até lá)",
                   style="Dica.TLabel").pack(side="left")
 
         # Com prazo, o valor digitado pode ser a parcela ou o total a dividir.
@@ -898,16 +914,26 @@ class DialogoTitulo(tk.Toplevel):
             text="De qual conta vai sair o dinheiro?" if pagar
                  else "Em qual conta o dinheiro vai entrar?")
 
+    def _quantas_parcelas(self) -> int:
+        """Pelo número informado ou pelo mês da última parcela."""
+        if self.var_prazo.get() == "ate":
+            try:
+                primeira, ultima = self.dt_venc.get_iso(), self.dt_ate.get_iso()
+            except Exception:
+                return 0
+            return max(services.meses_entre(primeira, ultima), 0)
+        try:
+            return int(self.var_meses.get() or 0)
+        except Exception:
+            return 0
+
     def _valor_da_parcela(self) -> tuple[float, int, float]:
         """(valor de cada parcela, quantas, sobra de centavos na primeira)."""
         try:
             valor = self.cp_valor.get_valor() if self.cp_valor.var.get().strip() else 0.0
         except Exception:
             valor = 0.0
-        try:
-            parcelas = int(self.var_meses.get() or 0)
-        except Exception:
-            parcelas = 0
+        parcelas = self._quantas_parcelas()
         if parcelas <= 1 or valor <= 0 or self.var_base.get() != "total":
             return valor, max(parcelas, 0), 0.0
         parcela = round(valor / parcelas, 2)
@@ -928,7 +954,15 @@ class DialogoTitulo(tk.Toplevel):
             return
         total = round(parcela * parcelas + sobra, 2)
         texto = (f"{parcelas}x de {services.moeda(parcela)}"
-                 f" = {services.moeda(total)} no total.")
+                 f" = {services.moeda(total)} no total")
+        try:
+            primeira = self.dt_venc.get_iso()
+            ultima = services.somar_meses(date.fromisoformat(primeira), parcelas - 1)
+            texto += (f", de {services.mes_curto(primeira[:7])}"
+                      f" a {services.mes_curto(ultima.strftime('%Y-%m'))}")
+        except Exception:
+            pass
+        texto += "."
         if abs(sobra) > 0.005:
             texto += f" A primeira fica {services.moeda(parcela + sobra)} (ajuste dos centavos)."
         self.lbl_parcelas.configure(text=texto, foreground=CORES["texto"])
@@ -1085,6 +1119,10 @@ class DialogoTitulo(tk.Toplevel):
             if self.titulo_id is None and self.var_fixa.get():
                 base = date.fromisoformat(vencimento)
                 parcela, meses, sobra = self._valor_da_parcela()
+                if self.var_prazo.get() == "ate" and meses <= 0:
+                    raise services.RegraNegocioError(
+                        "A última parcela precisa ser no mesmo mês do primeiro vencimento"
+                        " ou depois dele.")
                 rec_id, criados = services.criar_conta_fixa(
                     tipo, descricao, self.var_pessoa.get(), parcela, vencimento, conta_id,
                     centro_id, observacao, meses, multa_pct=multa, juros_mes_pct=juros,
