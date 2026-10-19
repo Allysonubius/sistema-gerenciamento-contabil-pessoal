@@ -35,6 +35,8 @@ class Financeiro(ttk.Frame):
         self.btn_pagamento = self.cabecalho.botao("Marcar como pago", self.alternar_pagamento,
                                                   "Sucesso.TButton")
         self.cabecalho.botao("Corrigir", self.editar)
+        # Conta fixa: liga e desliga a repetição direto daqui, que é onde se olha.
+        self.btn_fixa = self.cabecalho.botao("Desativar", self.alternar_fixa)
         ttk.Separator(self).pack(fill="x")
 
         corpo = ttk.Frame(self, padding=(24, 18))
@@ -523,6 +525,74 @@ class Financeiro(ttk.Frame):
         automatica = titulo is not None and titulo["pagamento_automatico"]
         self.btn_automatico.configure(
             text="Tirar do débito automático" if automatica else "Pôr no débito automático")
+        # Só faz sentido ligar/desligar o que se repete todo mês.
+        regra = self._regra_da_linha(titulo)
+        if regra is None:
+            self.btn_fixa.configure(text="Desativar", state="disabled")
+        elif regra["ativo"]:
+            self.btn_fixa.configure(text="Desativar", state="normal",
+                                    style="Perigo.TButton")
+        else:
+            self.btn_fixa.configure(text="Ativar", state="normal",
+                                    style="Sucesso.TButton")
+
+    @staticmethod
+    def _regra_da_linha(titulo):
+        """A conta fixa por trás da linha escolhida, se houver."""
+        if titulo is None or not titulo["recorrencia_id"]:
+            return None
+        return db.query_one("SELECT * FROM recorrencia WHERE id = ?",
+                            (titulo["recorrencia_id"],))
+
+    def alternar_fixa(self) -> None:
+        """Liga ou desliga a repetição da conta fixa da linha escolhida.
+
+        Desativada, os meses seguintes saem da lista na hora; o mês atual e o
+        histórico ficam. Ativada de novo, os meses à frente voltam.
+        """
+        titulo = self._titulo_selecionado()
+        if titulo is None:
+            messagebox.showinfo("Contas", "Escolha antes uma linha da lista.", parent=self)
+            return
+        regra = self._regra_da_linha(titulo)
+        if regra is None:
+            messagebox.showinfo(
+                "Não é uma conta fixa",
+                f"'{titulo['descricao']}' é uma conta avulsa: ela só existe neste mês.\n\n"
+                "Para tirá-la da lista use 'Cancelar conta' ou 'Apagar'.", parent=self)
+            return
+
+        recebe = titulo["tipo"] == "RECEBER"
+        if not regra["ativo"]:
+            if not messagebox.askyesno(
+                    "Ativar",
+                    f"'{titulo['descricao']}' volta a"
+                    f" {'entrar' if recebe else 'ser cobrada'} todo mês, a partir deste.\n\n"
+                    "Os próximos meses voltam para a lista.\n\nConfirma?", parent=self):
+                return
+            criados = services.reativar_recorrencia(regra["id"])
+            self._apos()
+            self.app.notificar(f"'{titulo['descricao']}' ativada: {criados} mês(es)"
+                               " voltaram para a lista.")
+            return
+
+        futuros = db.query_one(
+            "SELECT COUNT(*) AS c FROM titulo WHERE recorrencia_id = ?"
+            " AND status = 'ABERTO' AND competencia > ?",
+            (titulo["recorrencia_id"], services.mes_atual()))["c"]
+        if not messagebox.askyesno(
+                "Desativar",
+                f"'{titulo['descricao']}' deixa de"
+                f" {'entrar' if recebe else 'ser cobrada'} a partir do mês que vem.\n\n"
+                f"{futuros} mês(es) futuro(s) saem da lista agora. O mês atual e tudo o que"
+                f" já foi {'recebido' if recebe else 'pago'} continuam.\n\nConfirma?",
+                parent=self):
+            return
+        removidos = services.pausar_recorrencia(titulo["recorrencia_id"])
+        self._apos()
+        self.app.notificar(
+            f"'{titulo['descricao']}' desativada: {removidos} mês(es) futuro(s) saíram da"
+            " lista. Para voltar, use 'Contas fixas'.")
 
     def alternar_automatico(self) -> None:
         """Liga ou desliga o débito automático da conta escolhida."""
@@ -1077,7 +1147,13 @@ class JanelaContasFixas(tk.Toplevel):
             return
         rec = db.query_one("SELECT * FROM recorrencia WHERE id = ?", (rec_id,))
         if rec["ativo"]:
-            services.pausar_recorrencia(rec_id)
+            removidos = services.pausar_recorrencia(rec_id)
+            if removidos:
+                messagebox.showinfo(
+                    "Pausada",
+                    f"'{rec['descricao']}' não gera mais meses.\n\n{removidos} mês(es)"
+                    " futuro(s) saíram de Contas a Pagar e Receber. O mês atual e tudo"
+                    " o que já foi pago continuam.", parent=self)
         else:
             # Reativar limpa um fim já passado: senão ela ficaria ativa sem gerar nada.
             services.reativar_recorrencia(rec_id)

@@ -2344,6 +2344,9 @@ def gerar_titulos_recorrentes(ate_meses: int = MESES_GERADOS_A_FRENTE,
     (`ate_competencia`) lança também os meses até lá. Idempotente: cada
     competência de cada recorrência só é gerada uma vez.
     """
+    # Conta fixa pausada ou encerrada não pode deixar meses futuros na lista.
+    limpar_futuros_de_inativas()
+
     limite = mes_atual()
     for _ in range(ate_meses):
         limite = _mes_seguinte(limite)
@@ -2592,9 +2595,37 @@ def reativar_recorrencia(recorrencia_id: int) -> int:
     return gerar_titulos_recorrentes()
 
 
-def pausar_recorrencia(recorrencia_id: int) -> None:
-    """Para de lançar novos meses, mas mantém os que já estão na lista."""
-    db.execute("UPDATE recorrencia SET ativo = 0 WHERE id = ?", (recorrencia_id,))
+def pausar_recorrencia(recorrencia_id: int) -> int:
+    """Para de lançar novos meses e tira da lista os meses seguintes.
+
+    Pausar um salário que acabou não pode deixar os próximos meses contando como
+    dinheiro a receber. O mês atual continua — ele ainda pode acontecer — e nada
+    que já foi pago ou recebido é tocado. Devolve quantos meses saíram.
+    """
+    with db.transaction() as conn:
+        conn.execute("UPDATE recorrencia SET ativo = 0 WHERE id = ?", (recorrencia_id,))
+        cursor = conn.execute(
+            "DELETE FROM titulo WHERE recorrencia_id = ? AND status = 'ABERTO'"
+            " AND competencia > ?", (recorrencia_id, mes_atual()))
+    return cursor.rowcount
+
+
+def limpar_futuros_de_inativas() -> int:
+    """Tira da lista os meses futuros de contas fixas que não estão mais ativas.
+
+    Vale para o que ficou para trás: antes, pausar só parava de gerar, e os meses
+    já lançados continuavam aparecendo em Contas a Pagar e Receber.
+    """
+    atual = mes_atual()
+    with db.transaction() as conn:
+        # O corte respeita o fim combinado: quem encerrou em dezembro mantém os
+        # meses até lá; quem só pausou mantém o mês atual.
+        cursor = conn.execute(
+            "DELETE FROM titulo WHERE status = 'ABERTO' AND EXISTS ("
+            "  SELECT 1 FROM recorrencia r WHERE r.id = titulo.recorrencia_id"
+            "    AND r.ativo = 0 AND titulo.competencia > max(IFNULL(r.fim, ?), ?))",
+            (atual, atual))
+    return cursor.rowcount
 
 
 def tornar_recorrente(titulo_id: int, meses: int = 0) -> int:

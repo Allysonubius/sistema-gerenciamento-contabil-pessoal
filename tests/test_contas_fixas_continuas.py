@@ -123,9 +123,12 @@ def test_reativar_encerrada_volta_a_gerar(sistema, contas):
     assert len(meses_da(sistema, recorrencia)) > 12
 
 
-def test_pausar_mantem_o_que_ja_existe(sistema, contas):
+def test_pausar_mantem_o_mes_atual_e_tira_os_seguintes(sistema, contas):
+    """Pausada não pode seguir contando nos meses à frente."""
     recorrencia, _ = criar(sistema, contas)
-    antes = meses_da(sistema, recorrencia)
+    assert len(meses_da(sistema, recorrencia)) > 1
+
     sistema.pausar_recorrencia(recorrencia)
     sistema.gerar_titulos_recorrentes(ate_competencia=mais_meses(sistema, sistema.mes_atual(), 30))
-    assert meses_da(sistema, recorrencia) == antes
+
+    assert meses_da(sistema, recorrencia) == [sistema.mes_atual()]

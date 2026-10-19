@@ -177,8 +177,10 @@ class Salarios(ttk.Frame):
             return
         rec = db.query_one("SELECT * FROM recorrencia WHERE id = ?", (rec_id,))
         if rec["ativo"]:
-            services.pausar_recorrencia(rec_id)
-            self.app.notificar(f"'{rec['descricao']}' pausada: não gera novos meses.")
+            removidos = services.pausar_recorrencia(rec_id)
+            self.app.notificar(
+                f"'{rec['descricao']}' pausada: {removidos} mês(es) futuro(s) saíram de"
+                " Contas a Pagar e Receber.")
         else:
             services.reativar_recorrencia(rec_id)
             self.app.notificar(f"'{rec['descricao']}' voltou a entrar todo mês.")
