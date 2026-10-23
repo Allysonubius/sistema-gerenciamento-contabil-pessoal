@@ -68,6 +68,11 @@ class Configuracoes(ttk.Frame):
             self.chk_inicio_bandeja.pack(anchor="w")
             self._ajustar_inicio_bandeja()
 
+        self.var_trava_saldo = tk.BooleanVar(
+            value=db.get_config("bloquear_saldo_negativo", "1") == "1")
+        ttk.Checkbutton(prefs, style="Superficie.TCheckbutton", variable=self.var_trava_saldo,
+                        text="Não deixar tirar de uma conta mais do que há nela\n"
+                             "(trabalhar sempre dentro do saldo)").pack(anchor="w")
         self.var_conferencia = tk.BooleanVar(
             value=db.get_config("conferencia_automatica", "1") == "1")
         ttk.Checkbutton(prefs, style="Superficie.TCheckbutton", variable=self.var_conferencia,
@@ -317,6 +322,7 @@ class Configuracoes(ttk.Frame):
         db.set_config("fechar_para_bandeja", "1" if self.var_fechar_bandeja.get() else "0")
         db.set_config("backup_ao_sair", "1" if self.var_backup_sair.get() else "0")
         db.set_config("conferencia_automatica", "1" if self.var_conferencia.get() else "0")
+        db.set_config("bloquear_saldo_negativo", "1" if self.var_trava_saldo.get() else "0")
         if self.var_conferencia.get():
             services.conferir_automatico()
         db.set_config("encargos_automaticos", "1" if self.var_encargos.get() else "0")

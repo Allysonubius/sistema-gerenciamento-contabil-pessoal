@@ -175,8 +175,13 @@ def _tem_partidas(conta_id: int) -> bool:
     return db.query_one("SELECT 1 FROM partida WHERE conta_id = ?", (conta_id,)) is not None
 
 
-def saldo_conta(conta_id: int, ate: str | None = None, desde: str | None = None) -> float:
-    """Saldo na natureza da conta (positivo = saldo normal)."""
+def saldo_conta(conta_id: int, ate: str | None = None, desde: str | None = None,
+                ignorar_lancamento: int | None = None) -> float:
+    """Saldo na natureza da conta (positivo = saldo normal).
+
+    ``ignorar_lancamento`` deixa de fora um lançamento específico — serve para
+    conferir o saldo ao corrigir um registro que já existe, sem contá-lo duas vezes.
+    """
     conta = obter_conta(conta_id)
     if conta is None:
         return 0.0
@@ -187,6 +192,9 @@ def saldo_conta(conta_id: int, ate: str | None = None, desde: str | None = None)
     if ate:
         filtros.append("l.data <= ?")
         params.append(ate)
+    if ignorar_lancamento:
+        filtros.append("l.id <> ?")
+        params.append(ignorar_lancamento)
     row = db.query_one(
         "SELECT COALESCE(SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE 0 END),0) AS d,"
         "       COALESCE(SUM(CASE WHEN p.tipo='C' THEN p.valor ELSE 0 END),0) AS c"
@@ -1355,6 +1363,8 @@ def alterar_valor_divida(conta_divida_id: int, saldo_real: float,
 ajustar_saldo_divida = alterar_valor_divida
 
 
+DOCUMENTO_QUITACAO = "QUITACAO"
+
 FORMAS_QUITACAO = {
     "PAGAMENTO": "Paguei o que faltava",
     "PERDAO": "Perdoada / baixada sem pagar",
@@ -1363,12 +1373,15 @@ FORMAS_QUITACAO = {
 
 def quitar_divida(conta_divida_id: int, forma: str = "PAGAMENTO",
                   conta_dinheiro_id: int | None = None, data_iso: str | None = None,
-                  juros: float = 0.0, observacao: str = "") -> dict:
+                  juros: float = 0.0, observacao: str = "",
+                  valor_pago: float | None = None,
+                  aceitar_desconto: bool = False) -> dict:
     """Encerra a dívida: zera o saldo e guarda a linha no histórico.
 
-    Com ``forma`` PAGAMENTO o que faltava sai da conta escolhida, como um
-    pagamento comum. Com PERDAO nada sai do bolso — a dívida foi perdoada ou
-    baixada — e o valor vira ganho, não pagamento.
+    Pagar menos do que se deve **não quita nada** — isso é pagamento parcial, e
+    o caminho é :func:`pagar_divida`. Só com ``aceitar_desconto`` a dívida é
+    encerrada por um valor menor, porque aí houve acordo: o credor abriu mão do
+    resto. Com ``forma`` PERDAO nada sai do bolso.
     """
     if forma not in FORMAS_QUITACAO:
         raise RegraNegocioError("Escolha como a dívida foi encerrada.")
@@ -1381,28 +1394,63 @@ def quitar_divida(conta_divida_id: int, forma: str = "PAGAMENTO",
     if saldo < CENTAVO:
         raise RegraNegocioError("Esta dívida já está zerada.")
 
+    desconto = 0.0
     if forma == "PAGAMENTO":
         if conta_dinheiro_id is None:
             raise RegraNegocioError("Escolha de qual conta saiu o dinheiro.")
-        lancamento_id = pagar_divida(conta_divida_id, saldo, conta_dinheiro_id, data_iso,
+        pago = round(saldo if valor_pago is None else valor_pago, 2)
+        if pago <= 0:
+            raise RegraNegocioError("Informe quanto foi pago na quitação.")
+        if pago > saldo + CENTAVO:
+            raise RegraNegocioError(
+                f"Você deve {moeda(saldo)} nesta dívida e está pagando {moeda(pago)}."
+                " Ajuste o valor.")
+        desconto = round(saldo - pago, 2)
+        if desconto > CENTAVO and not aceitar_desconto:
+            raise RegraNegocioError(
+                f"Pagar {moeda(pago)} não quita esta dívida: ainda ficariam"
+                f" {moeda(desconto)} a pagar." + '\\n\\n' +
+                "Use 'Pagar uma parte' para registrar o que você pagou, ou"
+                " confirme que o resto foi perdoado em um acordo.")
+        lancamento_id = pagar_divida(conta_divida_id, pago, conta_dinheiro_id, data_iso,
                                      juros=juros,
                                      descricao=f"Quitação — {divida['nome']}")
+        # Marca de origem: é por ela que o "reabrir" sabe o que pode apagar.
+        db.execute("UPDATE lancamento SET documento = ? WHERE id = ?",
+                   (DOCUMENTO_QUITACAO, lancamento_id))
+        if desconto > CENTAVO:
+            # O que o credor abriu mão não é pagamento: entra como ganho.
+            ajuste = ajustar_saldo(conta_divida_id, 0.0, data_iso,
+                                   motivo=f"Desconto na quitação — {divida['nome']}")
+            if ajuste:
+                db.execute("UPDATE lancamento SET documento = ? WHERE id = ?",
+                           (DOCUMENTO_QUITACAO, ajuste))
     else:
         conta_dinheiro_id = None
+        pago = 0.0
+        desconto = round(saldo, 2)
         lancamento_id = ajustar_saldo(conta_divida_id, 0.0, data_iso,
                                       motivo=f"Dívida baixada sem pagamento — {divida['nome']}")
+        if lancamento_id:
+            db.execute("UPDATE lancamento SET documento = ? WHERE id = ?",
+                       (DOCUMENTO_QUITACAO, lancamento_id))
 
+    anotacao = observacao.strip()
+    if desconto > CENTAVO:
+        aviso = (f"Pagos {moeda(round(saldo - desconto, 2))} de {moeda(saldo)}"
+                 f" — desconto de {moeda(desconto)}.")
+        anotacao = (anotacao + chr(10) + aviso).strip()
     quitacao_id = db.execute(
         "INSERT INTO divida_quitacao (conta_id, nome, credor, data, valor, forma,"
-        " conta_dinheiro_id, lancamento_id, observacao, criado_em)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        " conta_dinheiro_id, lancamento_id, observacao, criado_em, valor_pago, desconto)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (conta_divida_id, divida["nome"], divida["instituicao"] or "", data_iso,
-         round(saldo, 2), forma, conta_dinheiro_id, lancamento_id, observacao.strip(),
-         datetime.now().isoformat(timespec="seconds")))
+         round(saldo, 2), forma, conta_dinheiro_id, lancamento_id, anotacao,
+         datetime.now().isoformat(timespec="seconds"), round(pago, 2), round(desconto, 2)))
     # Zerada e fora da lista de dívidas ativas; o histórico guarda a memória.
     db.execute("UPDATE conta SET ativo = 0 WHERE id = ?", (conta_divida_id,))
-    return {"id": quitacao_id, "valor": round(saldo, 2), "forma": forma,
-            "lancamento_id": lancamento_id}
+    return {"id": quitacao_id, "valor": round(saldo, 2), "pago": round(saldo - desconto, 2),
+            "desconto": desconto, "forma": forma, "lancamento_id": lancamento_id}
 
 
 def listar_dividas_quitadas(texto: str = "") -> list[dict]:
@@ -1416,20 +1464,58 @@ def listar_dividas_quitadas(texto: str = "") -> list[dict]:
         "SELECT q.*, c.nome AS conta_dinheiro_nome FROM divida_quitacao q"
         " LEFT JOIN conta c ON c.id = q.conta_dinheiro_id"
         f" WHERE {' AND '.join(filtros)} ORDER BY q.data DESC, q.id DESC", tuple(params))
-    return [{**dict(linha), "forma_texto": FORMAS_QUITACAO.get(linha["forma"], linha["forma"])}
-            for linha in linhas]
+    saida = []
+    for linha in linhas:
+        item = dict(linha)
+        item["forma_texto"] = FORMAS_QUITACAO.get(linha["forma"], linha["forma"])
+        pago = linha["valor_pago"]
+        item["valor_pago"] = round(float(pago if pago is not None else linha["valor"]), 2)
+        item["desconto"] = round(float(linha["desconto"] or 0), 2)
+        saida.append(item)
+    return saida
 
 
 def desfazer_quitacao(quitacao_id: int) -> None:
-    """Volta atrás: a dívida reabre com o valor que tinha e sai do histórico."""
+    """Volta atrás: a dívida reabre com o valor que tinha e sai do histórico.
+
+    Só apaga o lançamento que a própria quitação criou — reconhecido pelo
+    documento. Sem essa conferência, um id reaproveitado levava embora um
+    registro do usuário que nada tinha a ver com a dívida.
+    """
     quitacao = db.query_one("SELECT * FROM divida_quitacao WHERE id = ?", (quitacao_id,))
     if quitacao is None:
         raise RegraNegocioError("Quitação não encontrada.")
+    # Quitação com desconto cria dois lançamentos (o pagamento e a baixa do que
+    # foi perdoado): os dois precisam sair, senão a dívida volta pela metade.
+    nossos = [l["id"] for l in db.query(
+        "SELECT l.id FROM lancamento l WHERE l.documento = ? AND l.data = ?"
+        " AND EXISTS (SELECT 1 FROM partida p WHERE p.lancamento_id = l.id"
+        "             AND p.conta_id = ?)",
+        (DOCUMENTO_QUITACAO, quitacao["data"], quitacao["conta_id"]))]
     with db.transaction() as conn:
-        if quitacao["lancamento_id"]:
-            conn.execute("DELETE FROM lancamento WHERE id = ?", (quitacao["lancamento_id"],))
+        for lancamento_id in nossos:
+            conn.execute("DELETE FROM lancamento WHERE id = ?", (lancamento_id,))
         conn.execute("UPDATE conta SET ativo = 1 WHERE id = ?", (quitacao["conta_id"],))
         conn.execute("DELETE FROM divida_quitacao WHERE id = ?", (quitacao_id,))
+
+
+def limpar_quitacoes_incoerentes() -> int:
+    """Tira do histórico as quitações de dívidas que voltaram a existir.
+
+    Acontece quando o lançamento da quitação é desfeito por outro caminho: a
+    dívida reaparece com saldo, mas o histórico continuava jurando que ela foi
+    encerrada. Nenhum lançamento é tocado aqui.
+    """
+    removidas = 0
+    for quitacao in db.query("SELECT * FROM divida_quitacao"):
+        conta = obter_conta(quitacao["conta_id"])
+        if conta is None:
+            continue
+        voltou = conta["ativo"] and saldo_conta(quitacao["conta_id"]) > CENTAVO
+        if voltou:
+            db.execute("DELETE FROM divida_quitacao WHERE id = ?", (quitacao["id"],))
+            removidas += 1
+    return removidas
 
 
 def listar_emprestimos() -> list[dict]:
@@ -1704,6 +1790,54 @@ def validar_partidas(partidas: list[Partida]) -> float:
     return debitos
 
 
+def bloqueia_saldo_negativo() -> bool:
+    """Trabalhar dentro do saldo é o padrão; dá para desligar em Ajustes."""
+    return db.get_config("bloquear_saldo_negativo", "1") == "1"
+
+
+# Registros que apenas retratam o que já aconteceu — eles não podem ser barrados
+# por saldo, senão não dá nem para informar quanto a conta tinha.
+DOCUMENTOS_SEM_TRAVA = ("SALDO-INICIAL", "IMPORTADO", "UNIFICACAO", "ACERTO-DIVIDAS")
+
+
+def saldo_apos_lancamento(conta_id: int, data_iso: str, saida: float,
+                          ignorar_lancamento: int | None = None) -> float:
+    """Como a conta fica depois de tirar ``saida`` dela, naquela data."""
+    saldo = saldo_conta(conta_id, ate=data_iso, ignorar_lancamento=ignorar_lancamento)
+    return round(saldo - saida, 2)
+
+
+def _validar_saldo(partidas: list[Partida], data_iso: str, documento: str,
+                   lancamento_id: int | None = None) -> None:
+    """Recusa tirar de uma conta de dinheiro mais do que há nela.
+
+    Vale só para carteiras (banco, dinheiro em mãos, poupança): cartão de
+    crédito e dívidas continuam podendo crescer, que é a natureza deles.
+    """
+    if not bloqueia_saldo_negativo() or documento in DOCUMENTOS_SEM_TRAVA:
+        return
+    saidas: dict[int, float] = {}
+    for partida in partidas:
+        if partida.tipo != "C":
+            continue
+        conta = obter_conta(partida.conta_id)
+        if conta is None or conta["tipo"] != "ATIVO" or not conta["eh_carteira"]:
+            continue
+        saidas[partida.conta_id] = round(saidas.get(partida.conta_id, 0.0)
+                                         + partida.valor, 2)
+    for conta_id, valor in saidas.items():
+        depois = saldo_apos_lancamento(conta_id, data_iso, valor,
+                                       ignorar_lancamento=lancamento_id)
+        if depois < -CENTAVO:
+            conta = obter_conta(conta_id)
+            disponivel = round(valor + depois, 2)
+            raise RegraNegocioError(
+                f"{conta['nome']} tem {moeda(disponivel)} em {para_br(data_iso)} e você"
+                f" está tirando {moeda(valor)}."
+                f" Faltam {moeda(abs(depois))}.\n\nUse outra conta, ajuste o valor ou"
+                " registre antes o dinheiro que entrou.")
+
+
 def salvar_lancamento(
     lancamento_id: int | None,
     data_iso: str,
@@ -1718,6 +1852,7 @@ def salvar_lancamento(
     if not historico:
         raise RegraNegocioError("Escreva uma descrição para este registro.")
     total = validar_partidas(partidas)
+    _validar_saldo(partidas, data_iso, documento, lancamento_id)
     if lancamento_id:
         _garantir_edicao_permitida(lancamento_id, "alterado")
 
@@ -1857,6 +1992,20 @@ def classificar_lancamento(partidas: list[db.sqlite3.Row]) -> dict:
         return {"tipo": "AJUSTE", "rotulo": "Saldo inicial",
                 "categoria": "Ajuste de saldo",
                 "conta": nomes(debitos + creditos, {"ATIVO", "PASSIVO"})}
+
+    # Dívida de um lado e dinheiro do outro não é transferência: é pagamento
+    # (a dívida diminui) ou dinheiro tomado emprestado (a dívida cresce).
+    divida_debitada = [p for p in debitos if p["tipo_conta"] == "PASSIVO"]
+    divida_creditada = [p for p in creditos if p["tipo_conta"] == "PASSIVO"]
+    if divida_debitada and any(p["tipo_conta"] == "ATIVO" for p in creditos):
+        return {"tipo": "SAIDA", "rotulo": "Pagamento de dívida",
+                "categoria": nomes(divida_debitada),
+                "conta": nomes(creditos, {"ATIVO"})}
+    if divida_creditada and any(p["tipo_conta"] == "ATIVO" for p in debitos):
+        return {"tipo": "ENTRADA", "rotulo": "Dívida tomada",
+                "categoria": nomes(divida_creditada),
+                "conta": nomes(debitos, {"ATIVO"})}
+
     return {"tipo": "TRANSFERENCIA", "rotulo": "Transferência",
             "categoria": "Entre suas contas",
             "conta": f"{nomes(creditos)} → {nomes(debitos)}"}

@@ -4,6 +4,16 @@ from __future__ import annotations
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def sem_trava_de_saldo(sistema):
+    """Estes testes falam de orçamento, não de saldo.
+
+    Vários deles simulam meses gastando mais do que a conta de teste tem; a
+    trava de saldo é verificada em test_saldo_insuficiente.py.
+    """
+    sistema.db.set_config("bloquear_saldo_negativo", "0")
+
+
 @pytest.fixture()
 def mes(sistema):
     return sistema.mes_atual()

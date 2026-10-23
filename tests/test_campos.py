@@ -8,17 +8,6 @@ from types import SimpleNamespace
 import pytest
 
 
-@pytest.fixture(scope="session")
-def raiz_tk():
-    """Uma única janela Tk para a sessão: criar várias seguidas falha no Windows."""
-    try:
-        raiz = tk.Tk()
-    except tk.TclError:                       # pragma: no cover - máquina sem tela
-        pytest.skip("sem ambiente gráfico")
-    raiz.withdraw()
-    yield raiz
-    raiz.destroy()
-
 
 @pytest.fixture()
 def tela(sistema, raiz_tk):

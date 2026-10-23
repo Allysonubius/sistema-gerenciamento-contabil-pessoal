@@ -133,6 +133,8 @@ class Aplicacao(tk.Tk):
                 self.after(900, lambda: self.notificar(
                     "Encontrei um índice fora de sincronia no arquivo de dados e já"
                     " reconstruí. Seus registros estão todos lá."))
+            # Dívida que voltou a existir não pode seguir no histórico de quitadas.
+            services.limpar_quitacoes_incoerentes()
             services.conferir_automatico()
             encargos = services.lancar_encargos_do_mes()
             if encargos:

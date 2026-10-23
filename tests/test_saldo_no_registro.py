@@ -10,16 +10,6 @@ import tkinter as tk
 import pytest
 
 
-@pytest.fixture(scope="session")
-def raiz_tk():
-    try:
-        raiz = tk.Tk()
-    except tk.TclError:                       # pragma: no cover - máquina sem tela
-        pytest.skip("sem ambiente gráfico")
-    raiz.withdraw()
-    yield raiz
-    raiz.destroy()
-
 
 @pytest.fixture()
 def janela(sistema, contas, raiz_tk):

@@ -25,12 +25,14 @@ def test_pagar_e_desfazer_volta_tudo_como_estava(sistema, contas):
 
 
 def test_pode_pagar_de_novo_depois_de_desfazer(sistema, contas):
+    """Desfeito o pagamento, o dinheiro volta e dá para pagar por outra conta."""
     titulo = nova_conta(sistema, contas)
     sistema.baixar_titulo(titulo, sistema.hoje_iso(), 200.0, contas["banco"])
     sistema.estornar_titulo(titulo)
-    sistema.baixar_titulo(titulo, sistema.hoje_iso(), 200.0, contas["outra"])
-    assert sistema.saldo_conta(contas["banco"]) == 1000.0
-    assert sistema.saldo_conta(contas["outra"]) == -100.0
+    sistema.baixar_titulo(titulo, sistema.hoje_iso(), 80.0, contas["outra"])
+
+    assert sistema.saldo_conta(contas["banco"]) == 1000.0     # devolvido
+    assert sistema.saldo_conta(contas["outra"]) == 20.0       # 100 - 80
 
 
 def test_desfazer_conta_nao_paga_avisa(sistema, contas):

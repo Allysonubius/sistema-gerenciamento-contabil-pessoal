@@ -14,7 +14,7 @@ from typing import Iterator
 
 from app.config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -500,6 +500,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if "pagamento_automatico" not in existentes:
                 conn.execute(f"ALTER TABLE {tabela} ADD COLUMN pagamento_automatico"
                              " INTEGER NOT NULL DEFAULT 0")
+
+    if versao < 13:
+        # v13: quanto foi pago e quanto o credor abriu mão em cada quitação.
+        existentes = {c["name"] for c in conn.execute("PRAGMA table_info(divida_quitacao)")}
+        for nome, tipo in (("valor_pago", "REAL"), ("desconto", "REAL NOT NULL DEFAULT 0")):
+            if nome not in existentes:
+                conn.execute(f"ALTER TABLE divida_quitacao ADD COLUMN {nome} {tipo}")
+        # Quitações antigas: o que foi pago é o próprio valor, sem desconto.
+        conn.execute("UPDATE divida_quitacao SET valor_pago = valor"
+                     " WHERE valor_pago IS NULL")
 
     conn.executescript(INDICES_V5)
 

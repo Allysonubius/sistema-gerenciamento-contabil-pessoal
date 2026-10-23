@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+import tkinter as tk
 from pathlib import Path
 
 import pytest
@@ -61,3 +62,19 @@ def contas(sistema):
     receita = sistema._conta_por_codigo("4.1.01")     # Salário
     return {"banco": banco, "outra": outra, "cartao": cartao,
             "despesa": despesa, "receita": receita}
+
+
+@pytest.fixture(scope="session")
+def raiz_tk():
+    """Uma única janela Tk para toda a sessão de testes.
+
+    Dois Tk() no mesmo processo falham no Windows: quando cada arquivo criava o
+    seu, os testes de tela do segundo arquivo eram pulados em silêncio.
+    """
+    try:
+        raiz = tk.Tk()
+    except tk.TclError:                       # pragma: no cover - máquina sem tela
+        pytest.skip("sem ambiente gráfico")
+    raiz.withdraw()
+    yield raiz
+    raiz.destroy()

@@ -332,8 +332,12 @@ class DialogoMovimento(tk.Toplevel):
 
         ttk.Label(comuns, text="Quanto? (R$)", style="CampoSuperficie.TLabel").grid(
             row=0, column=1, sticky="w")
-        self.cp_valor = CampoValor(comuns, width=16)
-        self.cp_valor.grid(row=1, column=1, sticky="w", padx=(0, 20))
+        quadro_valor = ttk.Frame(comuns, style="Superficie.TFrame")
+        quadro_valor.grid(row=1, column=1, sticky="w", padx=(0, 20))
+        self.cp_valor = CampoValor(quadro_valor, width=16)
+        self.cp_valor.pack(side="left")
+        ttk.Button(quadro_valor, text="Limpar", width=7,
+                   command=self._limpar_valor).pack(side="left", padx=(6, 0))
 
         ttk.Label(comuns, text="Descrição (o que foi?)",
                   style="CampoSuperficie.TLabel").grid(row=0, column=2, sticky="w")
@@ -368,19 +372,53 @@ class DialogoMovimento(tk.Toplevel):
             row=linha, column=0, sticky="w", pady=(0, 2))
         ttk.Label(pai, text=dica, style="DicaSuperficie.TLabel").grid(
             row=linha + 1, column=0, sticky="w")
-        widget.grid(row=linha + 2, column=0, sticky="w", pady=(4, 16))
+        widget.grid(row=linha + 2, column=0, sticky="w", pady=(4, 2))
 
     def _com_saldo(self, pai, linha: int, seletor, sinal: int) -> None:
-        """Mostra o saldo da conta escolhida ao lado do seletor.
+        """Mostra o saldo da conta escolhida logo abaixo do seletor.
 
         ``sinal`` diz o que este registro faz com ela: -1 tira dinheiro,
-        +1 põe, 0 só mostra o saldo de hoje.
+        +1 põe, 0 só mostra o saldo de hoje. Em conta de onde o dinheiro sai, o
+        saldo também é sugerido no valor — é o teto do que dá para gastar.
         """
         rotulo = ttk.Label(pai, style="SecaoSuperficie.TLabel")
-        rotulo.grid(row=linha + 2, column=1, sticky="w", padx=(14, 0), pady=(4, 16))
+        rotulo.grid(row=linha + 3, column=0, columnspan=2, sticky="w", pady=(0, 10))
         self._saldos.append((seletor, rotulo, sinal))
-        seletor.bind("<<ComboboxSelected>>", lambda _e: self._atualizar_saldos(), add="+")
+        seletor.bind("<<ComboboxSelected>>",
+                     lambda _e, s=seletor, i=sinal: self._conta_escolhida(s, i), add="+")
         seletor.bind("<KeyRelease>", lambda _e: self._atualizar_saldos(), add="+")
+
+    def _conta_escolhida(self, seletor, sinal: int) -> None:
+        """Trocou de conta: o campo recomeça com o saldo da conta escolhida.
+
+        Manter o valor da conta anterior era pior do que apagar — ele não diz
+        nada sobre a conta nova e passava despercebido.
+        """
+        if sinal >= 0:
+            self._atualizar_saldos()
+            return
+        try:
+            conta_id = seletor.get_conta_id()
+        except Exception:
+            conta_id = None
+        self.cp_valor.limpar()
+        if conta_id is not None:
+            saldo = services.saldo_conta(conta_id, ate=self._data_segura())
+            if saldo > 0.005:
+                self.cp_valor.set_valor(saldo)
+        self._atualizar_saldos()
+
+    def _limpar_valor(self) -> None:
+        """Apaga o valor sugerido para digitar outro."""
+        self.cp_valor.limpar()
+        self.cp_valor.focus_set()
+        self._atualizar_saldos()
+
+    def _data_segura(self) -> str:
+        try:
+            return self.dt_data.get_iso()
+        except Exception:
+            return services.hoje_iso()
 
     def _atualizar_saldos(self) -> None:
         """Redesenha os saldos: quanto a conta tem hoje e como fica depois."""

@@ -1825,10 +1825,14 @@ class DialogoPagarDivida(tk.Toplevel):
 
         ttk.Label(corpo, text="Quanto pagou (R$)", style="Campo.TLabel").grid(
             row=2, column=0, sticky="w")
-        self.cp_valor = CampoValor(corpo, width=16)
+        quadro_valor = ttk.Frame(corpo)
+        quadro_valor.grid(row=3, column=0, sticky="w", pady=(4, 14), padx=(0, 16))
+        self.cp_valor = CampoValor(quadro_valor, width=16)
         if divida["valor_parcela"]:
             self.cp_valor.set_valor(divida["valor_parcela"])
-        self.cp_valor.grid(row=3, column=0, sticky="w", pady=(4, 14), padx=(0, 16))
+        self.cp_valor.pack(side="left")
+        ttk.Button(quadro_valor, text="Limpar", width=7,
+                   command=self._limpar_valor).pack(side="left", padx=(6, 0))
 
         ttk.Label(corpo, text="Quando", style="Campo.TLabel").grid(row=2, column=1, sticky="w")
         self.dt_data = CampoData(corpo, services.hoje_iso())
@@ -1837,33 +1841,38 @@ class DialogoPagarDivida(tk.Toplevel):
         ttk.Label(corpo, text="De qual conta saiu", style="Campo.TLabel").grid(
             row=4, column=0, columnspan=2, sticky="w")
         self.sel_conta = SeletorConta(corpo, tipos=("ATIVO",), width=44)
-        self.sel_conta.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 14))
+        self.sel_conta.grid(row=5, column=0, columnspan=2, sticky="w", pady=(4, 2))
+        self.sel_conta.bind("<<ComboboxSelected>>", lambda _e: self._conta_escolhida(),
+                            add="+")
+        self.lbl_saldo = ttk.Label(corpo, style="Secao.TLabel", wraplength=520,
+                                   justify="left")
+        self.lbl_saldo.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         ttk.Label(corpo, text="Quanto disso foi juros (opcional)",
-                  style="Campo.TLabel").grid(row=6, column=0, sticky="w")
+                  style="Campo.TLabel").grid(row=7, column=0, sticky="w")
         self.cp_juros = CampoValor(corpo, width=16)
-        self.cp_juros.grid(row=7, column=0, sticky="w", pady=(4, 10))
+        self.cp_juros.grid(row=8, column=0, sticky="w", pady=(4, 10))
         ttk.Label(corpo, text="Os juros viram despesa; o restante abate a dívida.",
-                  style="Dica.TLabel").grid(row=7, column=1, sticky="w", pady=(4, 10))
+                  style="Dica.TLabel").grid(row=8, column=1, sticky="w", pady=(4, 10))
 
         # Mostra na hora quanto ainda vai faltar: é o que a pessoa quer saber ao
         # pagar só um pedaço da dívida.
         self.lbl_previsao = ttk.Label(corpo, style="Secao.TLabel", wraplength=520,
                                       justify="left")
-        self.lbl_previsao.grid(row=8, column=0, columnspan=2, sticky="w", pady=(4, 10))
+        self.lbl_previsao.grid(row=9, column=0, columnspan=2, sticky="w", pady=(4, 10))
         self.cp_valor.ao_mudar(self._prever)
         self.cp_juros.ao_mudar(self._prever)
         self._prever()
 
         botoes = ttk.Frame(corpo)
-        botoes.grid(row=9, column=0, columnspan=2, sticky="e", pady=(8, 0))
+        botoes.grid(row=10, column=0, columnspan=2, sticky="e", pady=(8, 0))
         ttk.Button(botoes, text="Registrar", style="Primario.TButton",
                    command=self.salvar).pack(side="right")
         ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
         ttk.Button(botoes, text="Pagar tudo o que falta",
                    command=self._pagar_tudo).pack(side="right", padx=8)
 
-        centralizar(self, 640, 520)
+        centralizar(self, 660, 600)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
 
@@ -1873,6 +1882,7 @@ class DialogoPagarDivida(tk.Toplevel):
         return valor, juros
 
     def _prever(self) -> None:
+        self._conferir_saldo()
         try:
             valor, juros = self._valores()
         except services.RegraNegocioError:
@@ -1896,6 +1906,52 @@ class DialogoPagarDivida(tk.Toplevel):
                 text=f"Este valor passa {services.moeda(abs(falta))} do que você deve"
                      f" ({services.moeda(self.divida['saldo'])}).",
                 foreground=CORES["perigo"])
+
+    def _limpar_valor(self) -> None:
+        self.cp_valor.limpar()
+        self.cp_valor.focus_set()
+        self._prever()
+
+    def _conta_escolhida(self) -> None:
+        """Trocou de conta: recomeça com o que dá para pagar por ela."""
+        self.cp_valor.limpar()
+        try:
+            conta_id = self.sel_conta.get_conta_id()
+            data = self.dt_data.get_iso()
+        except Exception:
+            conta_id = None
+        if conta_id is not None:
+            sugerido = min(services.saldo_conta(conta_id, ate=data),
+                           float(self.divida["saldo"]))
+            if sugerido > 0.005:
+                self.cp_valor.set_valor(round(sugerido, 2))
+        self._prever()
+
+    def _conferir_saldo(self) -> None:
+        """Quanto a conta escolhida tem e como fica depois deste pagamento."""
+        if not hasattr(self, "lbl_saldo"):
+            return
+        try:
+            conta_id = self.sel_conta.get_conta_id()
+            valor = self.cp_valor.get_valor() if self.cp_valor.var.get().strip() else 0.0
+            data = self.dt_data.get_iso()
+        except Exception:
+            self.lbl_saldo.configure(text="")
+            return
+        if conta_id is None:
+            self.lbl_saldo.configure(text="Escolha a conta de onde o dinheiro sai.",
+                                     foreground=CORES["texto_suave"])
+            return
+        conta = services.obter_conta(conta_id)
+        saldo = services.saldo_conta(conta_id, ate=data)
+        falta = round(valor - saldo, 2)
+        texto = f"{conta['nome']} tem {services.moeda(saldo)}"
+        if valor > 0.005:
+            texto += f"  →  fica {services.moeda(round(saldo - valor, 2))}"
+        if falta > 0.005:
+            texto += f".  Faltam {services.moeda(falta)} nessa conta."
+        self.lbl_saldo.configure(
+            text=texto, foreground=CORES["perigo"] if falta > 0.005 else CORES["texto"])
 
     def _pagar_tudo(self) -> None:
         self.cp_juros.limpar()
@@ -2021,10 +2077,34 @@ class DialogoQuitarDivida(tk.Toplevel):
 
         self.area_pagamento = ttk.Frame(corpo)
         self.area_pagamento.pack(fill="x")
+        linha_valor = ttk.Frame(self.area_pagamento)
+        linha_valor.pack(fill="x")
+        ttk.Label(linha_valor, text="Quanto foi pago (R$)", style="Campo.TLabel").pack(
+            side="left")
+        self.cp_valor = CampoValor(linha_valor, width=16)
+        self.cp_valor.set_valor(float(divida["saldo"]))
+        self.cp_valor.pack(side="left", padx=10)
+        ttk.Button(linha_valor, text="Tudo o que falta",
+                   command=self._preencher_tudo).pack(side="left")
+        ttk.Button(linha_valor, text="Limpar", width=7,
+                   command=self._limpar_valor).pack(side="left", padx=(6, 0))
+
+        self.var_acordo = tk.BooleanVar(value=False)
+        self.chk_acordo = ttk.Checkbutton(
+            self.area_pagamento, variable=self.var_acordo, command=self._conferir,
+            text="Foi acordo: o credor perdoou o resto e a dívida está encerrada")
+        self.chk_acordo.pack(anchor="w", pady=(8, 0))
+
         ttk.Label(self.area_pagamento, text="De qual conta saiu",
-                  style="Campo.TLabel").pack(anchor="w")
+                  style="Campo.TLabel").pack(anchor="w", pady=(10, 0))
         self.sel_conta = SeletorConta(self.area_pagamento, tipos=("ATIVO",), width=44)
-        self.sel_conta.pack(anchor="w", pady=(4, 10))
+        self.sel_conta.pack(anchor="w", pady=(4, 4))
+        self.sel_conta.bind("<<ComboboxSelected>>", lambda _e: self._conta_escolhida(),
+                            add="+")
+        self.lbl_saldo = ttk.Label(self.area_pagamento, style="Secao.TLabel",
+                                   wraplength=520, justify="left")
+        self.lbl_saldo.pack(anchor="w", pady=(0, 10))
+        self.cp_valor.ao_mudar(self._conferir)
 
         linha = ttk.Frame(corpo)
         linha.pack(fill="x", pady=(4, 12))
@@ -2042,32 +2122,123 @@ class DialogoQuitarDivida(tk.Toplevel):
                    command=self.salvar).pack(side="right")
         ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
 
-        centralizar(self, 600, 520)
+        centralizar(self, 680, 660)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
-
     def _ajustar(self) -> None:
         """Perdoada não tem conta de onde sai o dinheiro."""
         if self.var_forma.get() == "PAGAMENTO":
             self.area_pagamento.pack(fill="x", before=self.dt_data.master)
+            self._conferir()
         else:
             self.area_pagamento.pack_forget()
+
+    def _preencher_tudo(self) -> None:
+        self.cp_valor.set_valor(float(self.divida["saldo"]))
+        self._conferir()
+
+    def _limpar_valor(self) -> None:
+        self.cp_valor.limpar()
+        self.cp_valor.focus_set()
+        self._conferir()
+
+    def _conta_escolhida(self) -> None:
+        """Trocou de conta: recomeça com o que dá para quitar por ela."""
+        self.cp_valor.limpar()
+        try:
+            conta_id = self.sel_conta.get_conta_id()
+            data = self.dt_data.get_iso()
+        except Exception:
+            conta_id = None
+        if conta_id is not None:
+            sugerido = min(services.saldo_conta(conta_id, ate=data),
+                           float(self.divida["saldo"]))
+            if sugerido > 0.005:
+                self.cp_valor.set_valor(round(sugerido, 2))
+        self._conferir()
+
+    def _conferir(self) -> None:
+        """Mostra o saldo da conta escolhida e avisa quando o valor não cabe."""
+        try:
+            valor = self.cp_valor.get_valor() if self.cp_valor.var.get().strip() else 0.0
+            conta_id = self.sel_conta.get_conta_id()
+            data = self.dt_data.get_iso()
+        except Exception:
+            self.lbl_saldo.configure(text="")
+            return
+        if conta_id is None:
+            self.lbl_saldo.configure(text="Escolha a conta de onde o dinheiro sai.",
+                                     foreground=CORES["texto_suave"])
+            return
+        conta = services.obter_conta(conta_id)
+        saldo = services.saldo_conta(conta_id, ate=data)
+        falta = round(valor - saldo, 2)
+        texto = f"{conta['nome']} tem {services.moeda(saldo)}"
+        if valor > 0.005:
+            texto += f"  →  fica {services.moeda(round(saldo - valor, 2))}"
+        if falta > 0.005:
+            texto += f".  Faltam {services.moeda(falta)} nessa conta."
+        cor = CORES["perigo"] if falta > 0.005 else CORES["texto"]
+
+        # O ponto que mais confunde: pagar menos não encerra a dívida.
+        resto = round(float(self.divida["saldo"]) - valor, 2)
+        if valor > 0.005 and resto > 0.005:
+            if self.var_acordo.get():
+                texto += (chr(10) + f"Acordo: {services.moeda(resto)} perdoados e a"
+                          " dívida é encerrada.")
+            else:
+                texto += (chr(10) + f"Isto não quita: sobram {services.moeda(resto)}."
+                          " Vou registrar como pagamento parcial.")
+                cor = CORES["alerta"]
+        self.lbl_saldo.configure(text=texto, foreground=cor)
 
     def salvar(self) -> None:
         forma = self.var_forma.get()
         try:
             conta = self.sel_conta.get_conta_id() if forma == "PAGAMENTO" else None
+            valor = None
+            if forma == "PAGAMENTO" and self.cp_valor.var.get().strip():
+                valor = self.cp_valor.get_valor()
+            resto = (round(float(self.divida["saldo"]) - valor, 2)
+                     if valor is not None else 0.0)
+            if forma == "PAGAMENTO" and resto > 0.005 and not self.var_acordo.get():
+                if not messagebox.askyesno(
+                        "Isto não quita a dívida",
+                        f"Pagando {services.moeda(valor)} ainda ficam"
+                        f" {services.moeda(resto)} a pagar." + chr(10) * 2 +
+                        "Registrar como pagamento parcial? A dívida continua na"
+                        " lista com o que falta.",
+                        " parcial? A dívida continua na lista com o que falta.",
+                        parent=self):
+                    return
+                services.pagar_divida(self.divida["conta_id"], valor, conta,
+                                      self.dt_data.get_iso(),
+                                      descricao=f"Pagamento — {self.divida['nome']}")
+                self.ao_salvar()
+                messagebox.showinfo(
+                    "Pagamento registrado",
+                    f"{services.moeda(valor)} pagos. '{self.divida['nome']}' continua"
+                    f" na lista com {services.moeda(resto)}.", parent=self.master)
+                self.destroy()
+                return
             resultado = services.quitar_divida(
                 self.divida["conta_id"], forma, conta, self.dt_data.get_iso(),
-                observacao=self.var_obs.get())
+                observacao=self.var_obs.get(), valor_pago=valor,
+                aceitar_desconto=self.var_acordo.get())
         except services.RegraNegocioError as erro:
             messagebox.showwarning("Não foi possível", str(erro), parent=self)
             return
         self.ao_salvar()
+        detalhe = (f"'{self.divida['nome']}' foi quitada:"
+                   f" {services.moeda(resultado['valor'])}.")
+        if resultado.get("desconto", 0) > 0.005:
+            detalhe = (f"'{self.divida['nome']}' foi quitada pagando"
+                       f" {services.moeda(resultado['pago'])} de"
+                       f" {services.moeda(resultado['valor'])} —"
+                       f" desconto de {services.moeda(resultado['desconto'])}.")
         messagebox.showinfo(
             "Dívida quitada",
-            f"'{self.divida['nome']}' foi quitada: {services.moeda(resultado['valor'])}.\n\n"
-            "Ela saiu da lista e está no histórico (botão 'Dívidas quitadas').",
+            detalhe + "\n\nEla saiu da lista e está no histórico (botão 'Dívidas quitadas').",
             parent=self.master)
         self.destroy()
 
@@ -2191,13 +2362,15 @@ class JanelaDividasQuitadas(tk.Toplevel):
                    command=self.reabrir).pack(side="right")
 
         self.tabela = Tabela(corpo, [
-            ("data", "Quitada em", 110, "center"),
-            ("nome", "Dívida", 230, "w"),
-            ("credor", "Com quem", 150, "w"),
-            ("valor", "Quanto faltava", 130, "e"),
-            ("forma", "Como terminou", 200, "w"),
-            ("conta", "Saiu da conta", 150, "w"),
-            ("observacao", "Observação", 200, "w"),
+            ("data", "Quitada em", 105, "center"),
+            ("nome", "Dívida", 200, "w"),
+            ("credor", "Com quem", 130, "w"),
+            ("valor", "Quanto faltava", 125, "e"),
+            ("pago", "Quanto paguei", 125, "e"),
+            ("desconto", "Desconto", 110, "e"),
+            ("forma", "Como terminou", 180, "w"),
+            ("conta", "Saiu da conta", 140, "w"),
+            ("observacao", "Observação", 180, "w"),
         ], largura_livre=True, altura=8)
         self.tabela.definir_texto_vazio("Nenhuma dívida quitada por aqui ainda.")
         self.tabela.pack(fill="both", expand=True)
@@ -2219,18 +2392,26 @@ class JanelaDividasQuitadas(tk.Toplevel):
         if escolha != "Todas":
             itens = [i for i in itens if i["forma_texto"] == escolha]
         self.paginacao.definir(itens)
-        total = round(sum(i["valor"] for i in itens), 2)
-        self.lbl_total.configure(
-            text=f"{len(itens)} dívida(s) quitada(s) · {services.moeda(total)} no total",
-            foreground=CORES["sucesso"])
+        # Somar tudo junto enganava: pagar e ser perdoado não são a mesma coisa.
+        devido = round(sum(i["valor"] for i in itens), 2)
+        pago = round(sum(i["valor_pago"] for i in itens), 2)
+        desconto = round(sum(i["desconto"] for i in itens), 2)
+        texto = (f"{len(itens)} dívida(s) encerrada(s) · deviam"
+                 f" {services.moeda(devido)} · paguei {services.moeda(pago)}")
+        if desconto > 0.005:
+            texto += f" · {services.moeda(desconto)} em desconto ou perdão"
+        self.lbl_total.configure(text=texto, foreground=CORES["sucesso"])
 
     def _desenhar(self, itens: list) -> None:
         self.tabela.limpar()
         for item in itens:
             self.tabela.inserir(
                 (services.para_br(item["data"]), item["nome"], item["credor"] or "—",
-                 services.moeda(item["valor"]), item["forma_texto"],
-                 item["conta_dinheiro_nome"] or "—", item["observacao"] or ""),
+                 services.moeda(item["valor"]),
+                 services.moeda(item["valor_pago"]) if item["valor_pago"] else "—",
+                 services.moeda(item["desconto"]) if item["desconto"] else "—",
+                 item["forma_texto"], item["conta_dinheiro_nome"] or "—",
+                 (item["observacao"] or "").replace(chr(10), " · ")),
                 iid=item["id"], tags=("quitado",))
         self.tabela.finalizar()
 
@@ -2501,9 +2682,13 @@ class DialogoBaixa(tk.Toplevel):
 
         ttk.Label(corpo, text="Valor efetivo (R$)", style="Campo.TLabel").grid(
             row=0, column=1, sticky="w")
-        self.cp_valor = CampoValor(corpo, width=16)
+        quadro_valor = ttk.Frame(corpo)
+        quadro_valor.grid(row=1, column=1, sticky="w", pady=(4, 16))
+        self.cp_valor = CampoValor(quadro_valor, width=16)
         self.cp_valor.set_valor(self.encargos["valor_atualizado"])
-        self.cp_valor.grid(row=1, column=1, sticky="w", pady=(4, 16))
+        self.cp_valor.pack(side="left")
+        ttk.Button(quadro_valor, text="Limpar", width=7,
+                   command=self._limpar_valor).pack(side="left", padx=(6, 0))
 
         ttk.Label(corpo, text="De qual conta saiu o dinheiro?" if pagar
                               else "Em qual conta o dinheiro entrou?",
@@ -2511,7 +2696,12 @@ class DialogoBaixa(tk.Toplevel):
         ttk.Label(corpo, text="Conta corrente, carteira, poupança ou cartão.",
                   style="Dica.TLabel").grid(row=3, column=0, columnspan=2, sticky="w")
         self.sel_caixa = SeletorConta(corpo, tipos=("ATIVO", "PASSIVO"), width=56)
-        self.sel_caixa.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 12))
+        self.sel_caixa.grid(row=4, column=0, columnspan=2, sticky="w", pady=(4, 4))
+        self.sel_caixa.bind("<<ComboboxSelected>>", lambda _e: self._conta_escolhida(),
+                            add="+")
+        self.lbl_saldo = ttk.Label(corpo, style="Secao.TLabel", wraplength=560,
+                                   justify="left")
+        self.lbl_saldo.grid(row=5, column=0, columnspan=2, sticky="w", pady=(0, 10))
         if self.titulo["conta_pagamento_id"]:
             # A conta escolhida no cadastro já vem preenchida.
             self.sel_caixa.set_conta_id(self.titulo["conta_pagamento_id"])
@@ -2524,7 +2714,7 @@ class DialogoBaixa(tk.Toplevel):
         # --- pagamento parcial ------------------------------------------
         self.quadro_parcial = ttk.Frame(corpo, style="Superficie.TFrame", padding=12)
         self.quadro_parcial.configure(relief="solid", borderwidth=1)
-        self.quadro_parcial.grid(row=5, column=0, columnspan=2, sticky="we", pady=(0, 12))
+        self.quadro_parcial.grid(row=6, column=0, columnspan=2, sticky="we", pady=(0, 12))
         self.lbl_parcial = ttk.Label(self.quadro_parcial, style="CampoSuperficie.TLabel",
                                      wraplength=520, justify="left")
         self.lbl_parcial.pack(anchor="w")
@@ -2549,17 +2739,17 @@ class DialogoBaixa(tk.Toplevel):
         # saltar aos olhos antes de confirmar.
         self.lbl_conferencia = ttk.Label(corpo, style="Secao.TLabel", wraplength=560,
                                          justify="left")
-        self.lbl_conferencia.grid(row=6, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        self.lbl_conferencia.grid(row=7, column=0, columnspan=2, sticky="w", pady=(0, 10))
 
         ttk.Label(corpo, text="Ao confirmar, este valor entra automaticamente na lista de"
                               " Entradas e Saídas.", style="Dica.TLabel").grid(
-            row=7, column=0, columnspan=2, sticky="w", pady=(0, 16))
+            row=8, column=0, columnspan=2, sticky="w", pady=(0, 16))
 
         self._parcial_visivel: bool | None = None
         self.cp_valor.ao_mudar(self._ao_mudar_valor)
 
         botoes = ttk.Frame(corpo)
-        botoes.grid(row=8, column=0, columnspan=2, sticky="e")
+        botoes.grid(row=9, column=0, columnspan=2, sticky="e")
         ttk.Button(botoes, text="Confirmar", style="Sucesso.TButton",
                    command=self.confirmar).pack(side="right")
         ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
@@ -2578,6 +2768,76 @@ class DialogoBaixa(tk.Toplevel):
     def _ao_mudar_valor(self) -> None:
         self._conferir_parcial()
         self._conferir_valor()
+        self._conferir_saldo()
+
+    def _limpar_valor(self) -> None:
+        self.cp_valor.limpar()
+        self.cp_valor.focus_set()
+        self._ao_mudar_valor()
+
+    def _conta_escolhida(self) -> None:
+        """Trocou a conta: o valor recomeça no que dá para pagar por ela.
+
+        Cabendo o valor devido, é ele que fica; se a conta tem menos, o campo
+        vem com o saldo — pagamento parcial à vista, em vez de um número que a
+        conta não cobre.
+        """
+        try:
+            conta_id = self.sel_caixa.get_conta_id()
+            data = self.dt_data.get_iso()
+        except Exception:
+            self._ao_mudar_valor()
+            return
+        devido = self._devido()
+        self.cp_valor.limpar()
+        if conta_id is not None:
+            conta = services.obter_conta(conta_id)
+            if conta["tipo"] == "PASSIVO" or self.titulo["tipo"] == "RECEBER":
+                self.cp_valor.set_valor(devido)      # cartão e recebimento não têm teto
+            else:
+                saldo = services.saldo_conta(conta_id, ate=data)
+                sugerido = min(devido, max(saldo, 0.0))
+                if sugerido > 0.005:
+                    self.cp_valor.set_valor(round(sugerido, 2))
+        self._ao_mudar_valor()
+
+    def _conferir_saldo(self) -> None:
+        """Mostra quanto a conta escolhida tem e como fica depois do pagamento."""
+        if not hasattr(self, "lbl_saldo"):
+            return
+        try:
+            conta_id = self.sel_caixa.get_conta_id()
+            valor = self.cp_valor.get_valor() if self.cp_valor.var.get().strip() else 0.0
+            data = self.dt_data.get_iso()
+        except Exception:
+            self.lbl_saldo.configure(text="")
+            return
+        if conta_id is None:
+            self.lbl_saldo.configure(text="")
+            return
+        conta = services.obter_conta(conta_id)
+        saldo = services.saldo_conta(conta_id, ate=data)
+        if conta["tipo"] == "PASSIVO":
+            # Pagar com cartão aumenta a dívida; não há saldo para estourar.
+            self.lbl_saldo.configure(
+                text=f"{conta['nome']}: dívida de {services.moeda(saldo)}"
+                     + (f"  →  fica {services.moeda(saldo + valor)}" if valor else ""),
+                foreground=CORES["texto_suave"])
+            return
+        if self.titulo["tipo"] == "RECEBER":
+            self.lbl_saldo.configure(
+                text=f"{conta['nome']} tem {services.moeda(saldo)}"
+                     + (f"  →  fica {services.moeda(saldo + valor)}" if valor else ""),
+                foreground=CORES["sucesso"] if valor else CORES["texto_suave"])
+            return
+        falta = round(valor - saldo, 2)
+        texto = f"{conta['nome']} tem {services.moeda(saldo)}"
+        if valor > 0.005:
+            texto += f"  →  fica {services.moeda(round(saldo - valor, 2))}"
+        if falta > 0.005:
+            texto += f".  Faltam {services.moeda(falta)} nessa conta."
+        self.lbl_saldo.configure(
+            text=texto, foreground=CORES["perigo"] if falta > 0.005 else CORES["texto"])
 
     def _conferir_valor(self) -> None:
         """Compara o valor digitado com o previsto e avisa a diferença."""
