@@ -93,7 +93,9 @@ class Relatorios(ttk.Frame):
         self.barra = ttk.Frame(direita, style="Superficie.TFrame", padding=14)
         self.barra.configure(relief="solid", borderwidth=1)
         self.barra.grid(row=1, column=0, sticky="ew", pady=(12, 0))
-        self.filtro = BarraFiltro(self.barra, self.gerar, fundo="Superficie.TFrame")
+        # Relatório existe para olhar o conjunto: abre com tudo o que há.
+        self.filtro = BarraFiltro(self.barra, self.gerar, fundo="Superficie.TFrame",
+                                  inicial="Todo o histórico")
         self.filtro.pack(side="left")
         self.lbl_sem_filtro = ttk.Label(
             self.barra, text="Este relatório mostra todo o seu histórico, do primeiro registro"

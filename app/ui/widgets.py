@@ -947,16 +947,17 @@ class BarraFiltro(ttk.Frame):
     """Escolha de período em linguagem simples."""
 
     OPCOES = ["Este mês", "Mês passado", "Últimos 30 dias", "Últimos 3 meses",
-              "Este ano", "Tudo", "Escolher datas"]
+              "Este ano", "Todo o histórico", "Escolher datas"]
 
-    def __init__(self, master, on_aplicar: Callable[[], None], fundo: str = "TFrame"):
+    def __init__(self, master, on_aplicar: Callable[[], None], fundo: str = "TFrame",
+                 inicial: str = "Este mês"):
         super().__init__(master, style=fundo)
         self.on_aplicar = on_aplicar
         estilo_label = "CampoSuperficie.TLabel" if fundo == "Superficie.TFrame" else "Campo.TLabel"
 
         ttk.Label(self, text="Mostrar:", style=estilo_label).pack(side="left")
         self.cb_atalho = ttk.Combobox(self, state="readonly", width=16, values=self.OPCOES)
-        self.cb_atalho.set("Este mês")
+        self.cb_atalho.set(inicial if inicial in self.OPCOES else "Este mês")
         self.cb_atalho.pack(side="left", padx=(8, 8))
         self.cb_atalho.bind("<<ComboboxSelected>>", lambda _e: self._aplicar_atalho())
 
@@ -983,6 +984,8 @@ class BarraFiltro(ttk.Frame):
         self.lbl_periodo = ttk.Label(
             self, style="DicaSuperficie.TLabel" if fundo == "Superficie.TFrame" else "Dica.TLabel")
         self.lbl_periodo.pack(side="left")
+        # Sem isto, o atalho inicial aparecia escolhido mas as datas seguiam no mês.
+        self._aplicar_atalho(avisar=False)
         self._atualizar_rotulo()
 
         # Datas digitadas também consultam sozinhas, sem precisar do botão.
@@ -997,13 +1000,8 @@ class BarraFiltro(ttk.Frame):
         self._atualizar_rotulo()
         self.on_aplicar()
 
-    def _aplicar_atalho(self) -> None:
-        opcao = self.cb_atalho.get()
-        if opcao == "Escolher datas":
-            self.lbl_periodo.pack_forget()
-            self.area_datas.pack(side="left")
-            return
-        self.area_datas.pack_forget()
+    def _intervalo(self, opcao: str) -> tuple[str, str]:
+        """As datas de cada atalho, sem mexer na tela."""
         hoje = date.today()
         if opcao == "Este mês":
             inicio, fim = services.primeiro_dia_mes(), services.ultimo_dia_mes()
@@ -1018,12 +1016,26 @@ class BarraFiltro(ttk.Frame):
             inicio = hoje.replace(month=1, day=1).isoformat()
             fim = hoje.replace(month=12, day=31).isoformat()
         else:
-            inicio, fim = "1900-01-01", "2999-12-31"
+            # Todo o histórico: começa no primeiro registro que existe de verdade.
+            primeiro = services.primeiro_mes_registrado()
+            inicio = f"{primeiro}-01" if primeiro else "1900-01-01"
+            fim = max(hoje.isoformat(), services.ultimo_dia_mes())
+        return inicio, fim
+
+    def _aplicar_atalho(self, avisar: bool = True) -> None:
+        opcao = self.cb_atalho.get()
+        if opcao == "Escolher datas":
+            self.lbl_periodo.pack_forget()
+            self.area_datas.pack(side="left")
+            return
+        self.area_datas.pack_forget()
+        inicio, fim = self._intervalo(opcao)
         self.dt_inicio.set_iso(inicio)
         self.dt_fim.set_iso(fim)
         self._atualizar_rotulo()
         self.lbl_periodo.pack(side="left")
-        self.on_aplicar()
+        if avisar:
+            self.on_aplicar()
 
     def deslocar(self, passos: int) -> None:
         """◀ ▶ andam de mês em mês quando o período é um mês inteiro.

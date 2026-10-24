@@ -1935,8 +1935,10 @@ def listar_lancamentos(
     texto: str = "",
     conta_id: int | None = None,
     centro_custo_id: int | None = None,
-    limite: int = 1000,
+    limite: int | None = None,
 ) -> list[db.sqlite3.Row]:
+    """Lançamentos do período. Sem ``limite``, traz tudo — o histórico é inteiro
+    do usuário, e cortar em mil registros escondia os mais antigos."""
     filtros, params = ["1=1"], []
     if desde:
         filtros.append("l.data >= ?")
@@ -1953,7 +1955,11 @@ def listar_lancamentos(
     if conta_id:
         filtros.append("EXISTS (SELECT 1 FROM partida p WHERE p.lancamento_id = l.id AND p.conta_id = ?)")
         params.append(conta_id)
-    params.append(limite)
+    # Sem limite, a cláusula nem entra: o SQLite devolve o histórico inteiro.
+    clausula_limite = ""
+    if limite:
+        clausula_limite = " LIMIT ?"
+        params.append(limite)
     return db.query(
         "SELECT l.*, cc.nome AS centro_custo,"
         " (SELECT GROUP_CONCAT(c.codigo || ' ' || c.nome, ' | ') FROM partida p"
@@ -1961,7 +1967,7 @@ def listar_lancamentos(
         " (SELECT GROUP_CONCAT(c.codigo || ' ' || c.nome, ' | ') FROM partida p"
         "   JOIN conta c ON c.id = p.conta_id WHERE p.lancamento_id = l.id AND p.tipo='C') AS creditos"
         " FROM lancamento l LEFT JOIN centro_custo cc ON cc.id = l.centro_custo_id"
-        f" WHERE {' AND '.join(filtros)} ORDER BY l.data DESC, l.id DESC LIMIT ?",
+        f" WHERE {' AND '.join(filtros)} ORDER BY l.data DESC, l.id DESC{clausula_limite}",
         tuple(params),
     )
 
@@ -2017,7 +2023,7 @@ def listar_movimentos(
     texto: str = "",
     conta_id: int | None = None,
     apenas_tipo: str | None = None,
-    limite: int = 1000,
+    limite: int | None = None,
     apenas_pendentes: bool = False,
 ) -> list[dict]:
     """Lançamentos já traduzidos para exibição em linguagem simples."""
