@@ -326,8 +326,22 @@ class Aplicacao(tk.Tk):
             except Exception:  # pragma: no cover
                 import logging
                 logging.exception("Falha nas rotinas da virada do dia")
+            self._reacertar_periodos()
             self.recarregar_tela_atual()
         self.after(INTERVALO_VIRADA_DIA_MS, self._vigiar_virada_do_dia)
+
+    def _reacertar_periodos(self) -> int:
+        """Põe os filtros de período de volta no dia de hoje.
+
+        Alcança todas as telas já montadas, não só a que está à vista: a
+        próxima que o usuário abrir também precisa falar do mês certo.
+        """
+        reacertados = 0
+        for tela in self._telas.values():
+            filtro = getattr(tela, "filtro", None)
+            if filtro is not None and hasattr(filtro, "revalidar"):
+                reacertados += bool(filtro.revalidar())
+        return reacertados
 
     def atualizar_dependentes(self) -> None:
         """Mantém o painel coerente depois de gravações em outras telas."""

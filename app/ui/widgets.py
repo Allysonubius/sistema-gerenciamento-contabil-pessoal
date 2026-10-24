@@ -1037,6 +1037,26 @@ class BarraFiltro(ttk.Frame):
         if avisar:
             self.on_aplicar()
 
+    def revalidar(self) -> bool:
+        """Reacerta as datas quando o dia vira com o programa aberto.
+
+        O atalho é relativo a hoje, mas as datas foram calculadas uma vez só, na
+        hora em que a tela nasceu. Quem deixa o sistema na bandeja atravessava a
+        virada do mês vendo "Este mês" com o mês anterior dentro.
+
+        Período escolhido à mão fica como está — ali a data é do usuário.
+        """
+        opcao = self.cb_atalho.get()
+        if opcao == "Escolher datas":
+            return False
+        try:
+            if self.periodo() == self._intervalo(opcao):
+                return False
+        except services.RegraNegocioError:
+            pass
+        self._aplicar_atalho(avisar=False)
+        return True
+
     def deslocar(self, passos: int) -> None:
         """◀ ▶ andam de mês em mês quando o período é um mês inteiro.
 

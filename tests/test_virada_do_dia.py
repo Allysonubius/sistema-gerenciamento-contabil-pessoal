@@ -21,9 +21,11 @@ class JanelaFalsa:
         self.recarregou = 0
         self.rotinas = 0
         self.agendado = None
+        self._telas = {}
 
     # --- partes reais, emprestadas da Aplicação ----------------------- #
     _vigiar_virada_do_dia = main_window.Aplicacao._vigiar_virada_do_dia
+    _reacertar_periodos = main_window.Aplicacao._reacertar_periodos
 
     # --- dublês --------------------------------------------------------- #
     def recarregar_tela_atual(self):
@@ -54,6 +56,31 @@ def test_dia_virou_refaz_as_contas_da_tela():
     assert janela.recarregou == 1
     assert janela.rotinas == 1               # contas fixas, faturas, automáticos
     assert janela._dia_em_tela == date.today()
+
+
+def test_o_filtro_de_periodo_e_reacertado(sistema, raiz_tk):
+    """Toda tela já montada volta para o mês de hoje, não só a que está à vista."""
+    import importlib
+
+    widgets = importlib.reload(importlib.import_module("app.ui.widgets"))
+
+    class TelaFalsa:
+        def __init__(self, filtro):
+            self.filtro = filtro
+
+    barra = widgets.BarraFiltro(raiz_tk, lambda: None)
+    barra.dt_inicio.set_iso("2020-01-01")
+    barra.dt_fim.set_iso("2020-01-31")
+
+    janela = JanelaFalsa()
+    janela._telas = {"Entradas e Saídas": TelaFalsa(barra), "Início": object()}
+    janela._dia_em_tela = date.today() - timedelta(days=1)
+    try:
+        janela._vigiar_virada_do_dia()
+        assert barra.periodo()[0].startswith(date.today().strftime("%Y-%m"))
+    finally:
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
 
 
 def test_vira_so_uma_vez_por_dia():
