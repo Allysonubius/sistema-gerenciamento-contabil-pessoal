@@ -24,6 +24,7 @@ class Orcamento(ttk.Frame):
         self.cabecalho.botao("Definir teto", self.definir, "Primario.TButton")
         self.cabecalho.botao("Aplicar plano enxuto", self.aplicar_plano, "Primario.TButton")
         self.cabecalho.botao("Sugerir pelo histórico", self.sugerir_todos)
+        self.cabecalho.botao("Poupança do mês", self.abrir_poupanca)
         self.cabecalho.botao("Meus objetivos", self.abrir_metas)
         ttk.Separator(self).pack(fill="x")
 
@@ -295,6 +296,13 @@ class Orcamento(ttk.Frame):
 
     def abrir_metas(self) -> None:
         JanelaMetas(self, self.recarregar)
+
+    def abrir_poupanca(self) -> None:
+        JanelaPoupanca(self, self._apos_poupanca)
+
+    def _apos_poupanca(self) -> None:
+        self.recarregar()
+        self.app.atualizar_dependentes()
 
 
 # --------------------------------------------------------------------------- #
@@ -576,4 +584,163 @@ class DialogoMeta(tk.Toplevel):
         self.destroy()
 
 
+# --------------------------------------------------------------------------- #
+class JanelaPoupanca(tk.Toplevel):
+    """O medidor: quanto entrou, quanto devia ficar guardado, quanto ficou.
 
+    Guardar não é o que sobra depois de gastar. A meta é uma fatia do que
+    entrou no próprio mês — recebeu menos, guarda menos — e o medidor diz,
+    antes de o mês acabar, se o ritmo de gasto está comendo a poupança.
+    """
+
+    def __init__(self, master, ao_mudar=None):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.title("Poupança do mês")
+        self.ao_mudar = ao_mudar
+
+        cabecalho = Cabecalho(
+            self, "Poupança do mês",
+            "Uma fatia do que entra fica guardada todo mês. Aqui dá para ver se está"
+            " acontecendo.")
+        cabecalho.pack(fill="x")
+        cabecalho.botao("Fechar", self.destroy)
+        ttk.Separator(self).pack(fill="x")
+
+        corpo = ttk.Frame(self, padding=(20, 16))
+        corpo.pack(fill="both", expand=True)
+
+        # --- a meta ------------------------------------------------------
+        ajuste = ttk.Frame(corpo, style="Superficie.TFrame", padding=14)
+        ajuste.configure(relief="solid", borderwidth=1)
+        ajuste.pack(fill="x")
+        linha = ttk.Frame(ajuste, style="Superficie.TFrame")
+        linha.pack(fill="x")
+        ttk.Label(linha, text="Guardar", style="CampoSuperficie.TLabel").pack(side="left")
+        self.var_pct = tk.StringVar(value=f"{services.percentual_de_poupanca():.0f}")
+        ttk.Spinbox(linha, from_=0, to=100, increment=1, width=6,
+                    textvariable=self.var_pct).pack(side="left", padx=6)
+        ttk.Label(linha, text="% de tudo o que entrar no mês",
+                  style="CampoSuperficie.TLabel").pack(side="left")
+        ttk.Button(linha, text="Salvar", style="Primario.TButton",
+                   command=self.salvar_pct).pack(side="left", padx=12)
+        ttk.Label(ajuste,
+                  text="A meta acompanha o que você recebe: num mês magro ela encolhe"
+                       " junto, em vez de virar uma cobrança impossível.",
+                  style="DicaSuperficie.TLabel", wraplength=700,
+                  justify="left").pack(anchor="w", pady=(8, 0))
+
+        # --- o mês -------------------------------------------------------
+        self.quadro_mes = ttk.Frame(corpo, style="Superficie.TFrame", padding=14)
+        self.quadro_mes.configure(relief="solid", borderwidth=1)
+        self.quadro_mes.pack(fill="x", pady=(12, 0))
+        self.lbl_mes = ttk.Label(self.quadro_mes, style="SecaoSuperficie.TLabel")
+        self.lbl_mes.pack(anchor="w")
+        self.canvas = tk.Canvas(self.quadro_mes, height=34, bg=CORES["superficie"],
+                                highlightthickness=0)
+        self.canvas.pack(fill="x", pady=(10, 0))
+        self.canvas.bind("<Configure>", lambda _e: self._desenhar())
+        self.lbl_recado = ttk.Label(self.quadro_mes, style="DicaSuperficie.TLabel",
+                                    wraplength=700, justify="left")
+        self.lbl_recado.pack(anchor="w", pady=(10, 0))
+        self.lbl_contas = ttk.Label(self.quadro_mes, style="DicaSuperficie.TLabel",
+                                    wraplength=700, justify="left")
+        self.lbl_contas.pack(anchor="w", pady=(6, 0))
+
+        # --- os últimos meses --------------------------------------------
+        ttk.Label(corpo, text="Como foi nos últimos meses",
+                  style="Secao.TLabel").pack(anchor="w", pady=(16, 6))
+        self.tabela = Tabela(corpo, [
+            ("mes", "Mês", 160, "w"),
+            ("recebido", "Entrou", 120, "e"),
+            ("alvo", "Meta", 110, "e"),
+            ("guardado", "Guardei", 110, "e"),
+            ("pct", "% do que entrou", 130, "center"),
+            ("situacao", "Resultado", 130, "center"),
+        ], largura_livre=True, altura=7)
+        self.tabela.definir_texto_vazio("Ainda não há meses com dinheiro entrando.")
+        self.tabela.pack(fill="both", expand=True)
+        self.lbl_resumo = ttk.Label(corpo, style="SecaoSuperficie.TLabel", wraplength=700,
+                                    justify="left")
+        self.lbl_resumo.pack(anchor="w", pady=(10, 0))
+
+        self.recarregar()
+        centralizar(self, 820, 620)
+        self.grab_set()
+
+    # ------------------------------------------------------------------ #
+    def salvar_pct(self) -> None:
+        try:
+            services.definir_percentual_de_poupanca(
+                services.para_float(self.var_pct.get() or "0"))
+        except services.RegraNegocioError as erro:
+            messagebox.showwarning("Não foi possível", str(erro), parent=self)
+            return
+        self.recarregar()
+        if self.ao_mudar:
+            self.ao_mudar()
+
+    def recarregar(self) -> None:
+        self.meta = services.meta_de_poupanca()
+        meta = self.meta
+        self.var_pct.set(f"{meta['percentual_meta']:.0f}")
+        quando = " (até agora)" if meta["em_curso"] else ""
+        self.lbl_mes.configure(
+            text=f"{meta['nome'].capitalize()}{quando}  —  entrou"
+                 f" {services.moeda(meta['recebido'])}, meta de guardar"
+                 f" {services.moeda(meta['alvo'])}")
+        self.lbl_recado.configure(text=services.recado_da_poupanca(meta),
+                                  foreground=self._cor(meta["situacao"]))
+        self.lbl_contas.configure(
+            text=f"Hoje você tem {services.moeda(meta['total_guardado'])} guardados."
+                 f"  Neste mês: aplicou {services.moeda(meta['aplicou'])},"
+                 f" resgatou {services.moeda(meta['resgatou'])},"
+                 f" gastou {services.moeda(meta['gastou'])}.")
+        self._desenhar()
+
+        resumo = services.resumo_poupanca()
+        self.tabela.limpar()
+        for linha in resumo["historico"]:
+            self.tabela.inserir(
+                (linha["nome"].capitalize(), services.moeda(linha["recebido"]),
+                 services.moeda(linha["alvo"]), services.moeda(linha["guardado"]),
+                 f"{linha['do_que_entrou']:.1f}%".replace(".", ","),
+                 "em dia" if linha["situacao"] == "em_dia"
+                 else "faltou" if linha["situacao"] == "parcial" else "nada"),
+                iid=linha["competencia"],
+                tags=() if linha["situacao"] == "em_dia" else ("negativo",))
+        self.tabela.finalizar()
+
+        if resumo["meses"]:
+            self.lbl_resumo.configure(
+                text=f"Você bateu a meta em {resumo['em_dia']} de {resumo['meses']} meses."
+                     f"  Na média guarda {services.moeda(resumo['media_guardado'])} por mês,"
+                     f" {resumo['media_pct']:.1f}% do que entra.".replace(".0%", "%"),
+                foreground=CORES["sucesso"] if resumo["em_dia"] * 2 >= resumo["meses"]
+                else CORES["alerta"])
+        else:
+            self.lbl_resumo.configure(text="")
+
+    @staticmethod
+    def _cor(situacao: str) -> str:
+        return {"em_dia": CORES["sucesso"], "parcial": CORES["alerta"],
+                "nada": CORES["perigo"]}.get(situacao, CORES["texto_suave"])
+
+    def _desenhar(self) -> None:
+        """Barra do quanto da meta já foi guardado."""
+        meta = getattr(self, "meta", None)
+        if meta is None:
+            return
+        self.canvas.delete("all")
+        largura = max(self.canvas.winfo_width(), 10)
+        altura = 34
+        self.canvas.create_rectangle(0, 8, largura, altura - 8, fill=CORES["fundo"],
+                                     outline=CORES["borda"])
+        fatia = max(0.0, min(meta["atingido"], 100.0)) / 100
+        if fatia > 0:
+            self.canvas.create_rectangle(0, 8, largura * fatia, altura - 8,
+                                         fill=self._cor(meta["situacao"]), outline="")
+        texto = (f"{meta['atingido']:.0f}% da meta" if meta["alvo"] > 0.005
+                 else "sem meta neste mês")
+        self.canvas.create_text(largura / 2, altura / 2, text=texto,
+                                font=(FONTE, 10, "bold"), fill=CORES["texto"])

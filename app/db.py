@@ -14,7 +14,7 @@ from typing import Iterator
 
 from app.config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -587,6 +587,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # dívida que não é cartão, o outro numa das duas contas de acerto.
         _reclassificar_acertos_de_divida(conn)
 
+    if versao < 16:
+        # v16: acertar o saldo de uma conta também não é ganho nem gasto.
+        #
+        # Pela mesma razão da v15: o que muda num acerto é a anotação, não o
+        # dinheiro. Os pequenos acertos de banco e de carteira iam para
+        # "Reembolsos e Restituições" e "Despesas Diversas" e inchavam o que a
+        # pessoa achava ter ganhado e gastado no mês.
+        _reclassificar_acertos_de_saldo(conn)
+
     if versao < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
@@ -597,6 +606,35 @@ def _reclassificar_acertos_de_divida(conn: sqlite3.Connection) -> int:
 
     Ver a migração v15. Devolve quantos lançamentos foram corrigidos.
     """
+    return _mover_para_patrimonio(
+        conn,
+        "EXISTS (SELECT 1 FROM partida p JOIN conta c ON c.id = p.conta_id"
+        "        WHERE p.lancamento_id = l.id AND c.tipo = 'PASSIVO'"
+        "          AND c.dia_fechamento IS NULL)",
+        "acerto de dívida reclassificado para o patrimônio")
+
+
+def _reclassificar_acertos_de_saldo(conn: sqlite3.Connection) -> int:
+    """Manda os acertos de saldo de conta para o Patrimônio Inicial.
+
+    Ver a migração v16. Diferente dos acertos de dívida, aqui a estrutura
+    sozinha não basta: "Despesas Diversas pagas pelo banco" é um gasto comum e
+    tem exatamente a mesma forma. Por isso o histórico também precisa bater —
+    é o texto que :func:`services.ajustar_saldo` sempre escreveu.
+    """
+    return _mover_para_patrimonio(
+        conn,
+        "l.historico LIKE 'Acerto de saldo%'"
+        " AND EXISTS (SELECT 1 FROM partida p JOIN conta c ON c.id = p.conta_id"
+        "             WHERE p.lancamento_id = l.id AND c.eh_carteira = 1)",
+        "acerto de saldo reclassificado para o patrimônio")
+
+
+def _mover_para_patrimonio(conn: sqlite3.Connection, condicao: str, motivo: str) -> int:
+    """Troca a conta de acerto (5.9.01 / 4.3.01) pelo Patrimônio Inicial.
+
+    Guarda na trilha o estado anterior de cada lançamento tocado.
+    """
     patrimonio = conn.execute("SELECT id FROM conta WHERE codigo = '3.1'").fetchone()
     if patrimonio is None:
         return 0
@@ -606,21 +644,19 @@ def _reclassificar_acertos_de_divida(conn: sqlite3.Connection) -> int:
         " WHERE l.origem = 'MANUAL'"
         "   AND (SELECT COUNT(*) FROM partida p WHERE p.lancamento_id = l.id) = 2"
         "   AND EXISTS (SELECT 1 FROM partida p JOIN conta c ON c.id = p.conta_id"
-        "               WHERE p.lancamento_id = l.id AND c.tipo = 'PASSIVO'"
-        "                 AND c.dia_fechamento IS NULL)"
-        "   AND EXISTS (SELECT 1 FROM partida p JOIN conta c ON c.id = p.conta_id"
         "               WHERE p.lancamento_id = l.id AND c.codigo IN ('5.9.01','4.3.01'))"
+        f"   AND ({condicao})"
     ).fetchall()
     if not alvos:
         return 0
 
     agora = datetime.now().isoformat(timespec="seconds")
     for alvo in alvos:
+        lanc = conn.execute("SELECT * FROM lancamento WHERE id = ?", (alvo["id"],)).fetchone()
         antes = conn.execute(
             "SELECT c.codigo, c.nome, p.tipo, p.valor FROM partida p"
             " JOIN conta c ON c.id = p.conta_id WHERE p.lancamento_id = ?"
             " ORDER BY p.tipo DESC, p.id", (alvo["id"],)).fetchall()
-        lanc = conn.execute("SELECT * FROM lancamento WHERE id = ?", (alvo["id"],)).fetchone()
         resumo = " | ".join(
             f"{linha['tipo']} {linha['codigo']} {linha['nome']} {float(linha['valor']):.2f}"
             for linha in antes)
@@ -628,8 +664,7 @@ def _reclassificar_acertos_de_divida(conn: sqlite3.Connection) -> int:
             "INSERT INTO lancamento_historico (lancamento_id, acao, quando, data, historico,"
             " documento, valor, partidas, motivo) VALUES (?,?,?,?,?,?,?,?,?)",
             (alvo["id"], "ALTERADO", agora, lanc["data"], lanc["historico"],
-             lanc["documento"], float(lanc["valor"]), resumo,
-             "acerto de dívida reclassificado para o patrimônio"))
+             lanc["documento"], float(lanc["valor"]), resumo, motivo))
         conn.execute(
             "UPDATE partida SET conta_id = ? WHERE lancamento_id = ?"
             "  AND conta_id IN (SELECT id FROM conta WHERE codigo IN ('5.9.01','4.3.01'))",

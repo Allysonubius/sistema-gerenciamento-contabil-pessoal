@@ -71,9 +71,9 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 420 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 445 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
-fechamento de competência, trilha de alterações, comprovantes e fluxo de caixa.
+fechamento de competência, trilha de alterações, comprovantes, fluxo de caixa e poupança.
 Cada teste roda num banco temporário próprio — os seus dados nunca são tocados.
 
 ## Privacidade e o que não está aqui
@@ -96,7 +96,7 @@ Este repositório contém **apenas o código**. Ficam de fora, pelo `.gitignore`
 | **Minhas Contas** | Cada banco, carteira, cartão pré-pago, vale ou cartão de crédito com saldo próprio, movimento do período, extrato individual, transferência e acerto de saldo. |
 | **Contas a Pagar** | Boletos e promessas de pagamento; ao marcar como pago, o movimento é registrado sozinho. Também abriga contas fixas e empréstimos. |
 | **Salários e Rendas** | Cada fonte de renda que se repete todo mês, com total já recebido, histórico mês a mês (previsto × recebido) e o que fazer ao trocar de emprego: encerrar a fonte antiga no último mês em que entrou e cadastrar a nova. |
-| **Orçamento** | Teto mensal por categoria, com consumo, ritmo e projeção; e os objetivos de poupança. |
+| **Orçamento** | Teto mensal por categoria, com consumo, ritmo e projeção; a poupança do mês (meta como fatia do que entrou) e os objetivos de poupança. |
 | **Contas e Categorias** | Contas de dinheiro (banco, carteira, cartão) e categorias de ganho/gasto — 67 já vêm prontas. |
 | **Relatórios** | Mês a mês, **Ano a ano**, Categorias mês a mês, Resumo por conta (balancete), Extrato (razão), Ganhos e gastos (DRE), Meu patrimônio (balanço), Histórico completo (diário) e Previsão de saldo. |
 | **Ajustes** | Preferências, cópias de segurança, restauração, exportação, conferência dos dados, **fechamento de competência** e **trilha de alterações**. |
@@ -272,19 +272,37 @@ lançamento é medido pelo efeito líquido sobre o conjunto das contas.
 O retrato por competência (ganhei mais do que gastei?) continua inteiro em
 `Relatórios → Ganhos e gastos` e em `Ano a ano`.
 
-## Acertar uma dívida não é ganho nem gasto
+## Acertar um saldo não é ganho nem gasto
 
-Corrigir quanto se deve é dizer que o saldo anotado estava errado — não se ganhou nem se
-gastou nada. Esses acertos iam para *Despesas Diversas* e *Reembolsos e Restituições*, e se
-misturavam ao que foi de fato gasto e recebido: uma dívida acertada em R$ 3.863,71 entrava
-no mês como se fosse dinheiro recebido.
+Acertar um saldo — de uma dívida ou de uma conta — é dizer que a anotação estava errada.
+Nada foi ganho nem gasto. Esses acertos iam para *Despesas Diversas* e *Reembolsos e
+Restituições* e se misturavam ao que foi de fato gasto e recebido: uma dívida acertada em
+R$ 3.863,71 entrava no mês como se fosse dinheiro recebido, e os acertos miúdos de banco
+inchavam o que a pessoa achava ter ganhado.
 
-A contrapartida passou a ser o **Patrimônio Inicial**, a mesma de um saldo inicial. A
-migração v15 reclassifica os acertos já gravados e registra cada um na trilha de
-alterações, com o estado anterior.
+A contrapartida passou a ser sempre o **Patrimônio Inicial**, a mesma de um saldo
+inicial. As migrações v15 (dívidas) e v16 (contas) reclassificam os acertos já gravados e
+registram cada um na trilha de alterações, com o estado anterior. No fluxo de caixa eles
+aparecem numa caixinha própria, *em acertos*, em vez de se esconderem entre os
+recebimentos.
 
-O acerto de uma **conta de banco** continua sendo ganho ou perda: ali a diferença é mesmo
-algo que faltou registrar.
+## Poupança do mês
+
+Guardar o que sobra é não guardar nada: num mês apertado sobra zero e a poupança some. A
+meta é uma **fatia do que entrou no próprio mês** — 10% por padrão, ajustável em
+`Orçamento → Poupança do mês`. Recebeu menos, a meta encolhe junto, em vez de virar uma
+cobrança impossível.
+
+O medidor compara três coisas:
+
+- **entrou** no mês (só recebimento de verdade; acerto de saldo não conta);
+- **a meta**, a fatia escolhida desse valor;
+- **o que ficou guardado**, que é o dinheiro que foi para as contas de investimento menos
+  o que foi resgatado delas — guardar 300 e tirar 250 de volta é ter guardado 50.
+
+O cartão *Poupança deste mês*, no painel, fica verde quando a meta foi batida, amarelo
+quando faltou e vermelho quando nada foi guardado, e diz quanto falta. A janela traz
+ainda os últimos seis meses, para ver se o hábito se sustenta.
 
 ## Fechamento de competência
 

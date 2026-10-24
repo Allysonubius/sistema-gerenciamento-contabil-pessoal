@@ -403,17 +403,17 @@ def registrar_saldo_inicial(conta_id: int, valor: float, data_iso: str | None = 
 
 
 def ajustar_saldo(conta_id: int, saldo_real: float, data_iso: str | None = None,
-                  motivo: str = "", contra_patrimonio: bool = False) -> int | None:
+                  motivo: str = "") -> int | None:
     """Acerta a conta pelo extrato real, lançando apenas a diferença.
 
     Devolve o id do lançamento criado ou None quando já estava correto.
 
-    ``contra_patrimonio`` muda a conta do outro lado. Numa conta de banco a
-    diferença é mesmo um ganho ou uma perda que faltava registrar. Já corrigir
-    quanto se deve é dizer que o saldo anotado estava errado desde o começo —
-    não se ganhou nem se gastou nada —, e jogar isso em receita ou despesa
-    inflava o mês inteiro: uma dívida acertada em 3.863,71 aparecia como se
-    fosse dinheiro recebido.
+    A diferença vai sempre para o Patrimônio Inicial, nunca para receita ou
+    despesa: acertar um saldo é dizer que a anotação estava errada, não que se
+    ganhou ou se gastou alguma coisa naquele mês. Enquanto ia para "Reembolsos"
+    e "Despesas Diversas", um acerto de 3.863,71 numa dívida entrava no mês
+    como se fosse dinheiro recebido, e os pequenos acertos de banco inchavam o
+    que a pessoa achava ter ganhado.
     """
     conta = obter_conta(conta_id)
     if conta is None:
@@ -424,20 +424,15 @@ def ajustar_saldo(conta_id: int, saldo_real: float, data_iso: str | None = None,
     if abs(diferenca) < CENTAVO:
         return None
 
-    if contra_patrimonio:
-        patrimonio = conta_patrimonio_inicial()
-        ajuste = ganho = {"id": patrimonio}
-    else:
-        ajuste = db.query_one("SELECT id FROM conta WHERE codigo = '5.9.01'")
-        ganho = db.query_one("SELECT id FROM conta WHERE codigo = '4.3.01'")
-        if ajuste is None or ganho is None:
-            raise RegraNegocioError("As contas de ajuste (5.9.01 e 4.3.01) não existem.")
+    patrimonio = conta_patrimonio_inicial()
+    ajuste = ganho = {"id": patrimonio}
 
     historico = motivo.strip() or f"Acerto de saldo — {conta['nome']}"
     valor = abs(diferenca)
     aumentar = diferenca > 0  # diferença já está na natureza da conta
 
-    # Subir o saldo de um ativo é ganho; subir o saldo de uma dívida é despesa.
+    # O lado do lançamento continua seguindo a natureza da conta; só a
+    # contrapartida deixou de ser receita ou despesa.
     if conta["natureza"] == "D":
         partidas = ([Partida(conta_id, "D", valor), Partida(ganho["id"], "C", valor)]
                     if aumentar
@@ -1382,11 +1377,8 @@ def alterar_valor_divida(conta_divida_id: int, saldo_real: float,
         raise RegraNegocioError(
             "Para encerrar a dívida use 'Quitar dívida' — assim ela entra no histórico"
             " como paga. Alterar o valor serve só para corrigir quanto você deve.")
-    # Contra o patrimônio, nunca contra receita ou despesa: corrigir quanto se
-    # deve não é ter ganho nem gasto nada neste mês.
     return ajustar_saldo(conta_divida_id, saldo_real, data_iso,
-                         motivo=f"Correção do valor da dívida — {divida['nome']}",
-                         contra_patrimonio=True)
+                         motivo=f"Correção do valor da dívida — {divida['nome']}")
 
 
 # Mantido para não quebrar chamadas antigas; o nome novo diz melhor o que faz.
@@ -5139,6 +5131,133 @@ def detalhe_do_fluxo(parcelas: dict[str, float], limite: int = 3) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Meta de poupança do mês
+# --------------------------------------------------------------------------- #
+# Guardar não é o que sobra depois de gastar: é uma fatia do que entrou, posta
+# de lado. A meta nasce do que você recebeu no próprio mês — recebeu menos,
+# guarda menos; recebeu mais, guarda mais — e o medidor diz, antes de o mês
+# acabar, se o ritmo de gasto está comendo a poupança.
+PCT_POUPANCA_PADRAO = 10.0
+
+
+def percentual_de_poupanca() -> float:
+    """Quanto do que entra deveria ficar guardado, em %."""
+    try:
+        valor = float(db.get_config("meta_poupanca_pct", str(PCT_POUPANCA_PADRAO)))
+    except ValueError:
+        return PCT_POUPANCA_PADRAO
+    return max(0.0, min(100.0, round(valor, 1)))
+
+
+def definir_percentual_de_poupanca(percentual: float) -> None:
+    if percentual < 0 or percentual > 100:
+        raise RegraNegocioError("A meta de poupança vai de 0% a 100% do que você recebe.")
+    db.set_config("meta_poupanca_pct", f"{round(float(percentual), 1)}")
+
+
+def total_guardado(ate: str | None = None) -> float:
+    """Quanto existe hoje nas contas de poupança e investimento."""
+    ate = ate or hoje_iso()
+    return round(sum(saldo_conta(conta["id"], ate=ate) for conta in listar_carteiras()
+                     if grupo_da_conta(conta) == "investimento"), 2)
+
+
+def _periodo_da_competencia(competencia: str) -> tuple[str, str]:
+    """Do dia 1 até o fim do mês — ou até hoje, se o mês ainda está correndo."""
+    inicio = f"{competencia}-01"
+    fim = _fim_do_mes(competencia)
+    hoje = hoje_iso()
+    return inicio, min(fim, hoje) if competencia == mes_atual() else fim
+
+
+def meta_de_poupanca(competencia: str | None = None) -> dict:
+    """O medidor: quanto deveria ter sido guardado e quanto foi de fato."""
+    competencia = competencia or mes_atual()
+    inicio, fim = _periodo_da_competencia(competencia)
+    fluxo = fluxo_de_caixa(inicio, fim)
+
+    recebido = round(fluxo["entradas"].get("recebimentos", 0.0), 2)
+    gastou = round(fluxo["saidas"].get("gastos", 0.0), 2)
+    aplicou = round(fluxo["saidas"].get("aplicado", 0.0), 2)
+    resgatou = round(fluxo["entradas"].get("resgatado", 0.0), 2)
+    guardado = round(aplicou - resgatou, 2)
+
+    percentual_meta = percentual_de_poupanca()
+    alvo = round(recebido * percentual_meta / 100, 2)
+    atingido = round(guardado / alvo * 100, 1) if alvo > CENTAVO else 0.0
+    do_que_entrou = round(guardado / recebido * 100, 1) if recebido > CENTAVO else 0.0
+
+    if recebido <= CENTAVO:
+        situacao = "sem_renda"
+    elif guardado >= alvo - CENTAVO:
+        situacao = "em_dia"
+    elif guardado > CENTAVO:
+        situacao = "parcial"
+    else:
+        situacao = "nada"
+
+    return {
+        "competencia": competencia,
+        "nome": mes_nome(competencia),
+        "em_curso": competencia == mes_atual(),
+        "percentual_meta": percentual_meta,
+        "recebido": recebido,
+        "gastou": gastou,
+        "aplicou": aplicou,
+        "resgatou": resgatou,
+        "guardado": guardado,
+        "alvo": alvo,
+        "falta": round(max(0.0, alvo - guardado), 2),
+        "atingido": atingido,
+        "do_que_entrou": do_que_entrou,
+        "situacao": situacao,
+        "sobrou_em_conta": fluxo["sobrou"],
+        "total_guardado": total_guardado(fim),
+    }
+
+
+# Uma frase por situação, para a tela não ter de montar texto.
+RECADOS_DA_POUPANCA = {
+    "sem_renda": "Nada entrou neste mês ainda — a meta aparece quando o dinheiro cair.",
+    "em_dia": "Você guardou o que se propôs a guardar.",
+    "parcial": "Você guardou, mas menos do que o combinado.",
+    "nada": "Nada foi guardado: está gastando tudo o que recebe.",
+}
+
+
+def recado_da_poupanca(meta: dict) -> str:
+    """O aviso em uma frase, já com os números no meio."""
+    base = RECADOS_DA_POUPANCA[meta["situacao"]]
+    if meta["situacao"] in ("sem_renda", "em_dia"):
+        return base
+    quando = "até agora" if meta["em_curso"] else "no mês"
+    return (f"{base} Dos {moeda(meta['recebido'])} que entraram {quando}, a meta era guardar"
+            f" {moeda(meta['alvo'])} ({meta['percentual_meta']:.0f}%) e ficaram"
+            f" {moeda(meta['guardado'])}. Faltam {moeda(meta['falta'])}.")
+
+
+def historico_poupanca(meses: int = 6) -> list[dict]:
+    """O medidor dos últimos meses, para ver se o hábito se sustenta."""
+    todos = meses_do_historico()
+    return [meta_de_poupanca(competencia) for competencia in todos[-meses:]]
+
+
+def resumo_poupanca(meses: int = 6) -> dict:
+    """Quantos dos últimos meses bateram a meta, e o quanto se guarda em média."""
+    historico = [m for m in historico_poupanca(meses) if m["recebido"] > CENTAVO]
+    if not historico:
+        return {"meses": 0, "em_dia": 0, "media_guardado": 0.0, "media_pct": 0.0,
+                "historico": []}
+    return {
+        "meses": len(historico),
+        "em_dia": sum(1 for m in historico if m["situacao"] == "em_dia"),
+        "media_guardado": round(sum(m["guardado"] for m in historico) / len(historico), 2),
+        "media_pct": round(sum(m["do_que_entrou"] for m in historico) / len(historico), 1),
+        "historico": historico,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Painel
 # --------------------------------------------------------------------------- #
 def resumo_dashboard() -> dict:
@@ -5229,6 +5348,7 @@ def resumo_dashboard() -> dict:
         "total_dividas": round(sum(d["saldo"] for d in dividas), 2),
         "investimentos": investimentos,
         "metas": metas,
+        "poupanca": meta_de_poupanca(),
         "previsao": previsao,
         "saldo_previsto_fim_mes": previsao["previsto"],
         "orcamento_restante": orcamento["restante"],

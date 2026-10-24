@@ -176,6 +176,18 @@ TOPICOS: list[tuple[str, str]] = [
      "Um gasto que nasceu do pagamento de um boleto não pode ser apagado na tela de\n"
      "Entradas e Saídas. Volte ao boleto e clique em 'Desfazer pagamento'."),
 
+    ("Guardar uma parte do que entra todo m\u00eas",
+     "Guardar o que sobra \u00e9 n\u00e3o guardar nada: num m\u00eas apertado sobra zero.\n\n"
+     "Por isso a meta \u00e9 uma fatia do que entrou \u2014 10% por padr\u00e3o. Recebeu menos, a meta\n"
+     "encolhe junto; recebeu mais, ela sobe.\n\n"
+     "Em 'Or\u00e7amento', clique em 'Poupan\u00e7a do m\u00eas' para escolher a sua porcentagem e ver:\n\n"
+     "  \u2022 quanto entrou no m\u00eas\n"
+     "  \u2022 quanto a meta pede que fique guardado\n"
+     "  \u2022 quanto de fato foi para as suas aplica\u00e7\u00f5es\n\n"
+     "Tirar dinheiro da aplica\u00e7\u00e3o desconta: guardar 300 e resgatar 250 \u00e9 guardar 50.\n\n"
+     "No painel, o cart\u00e3o 'Poupan\u00e7a deste m\u00eas' fica verde quando a meta foi batida,\n"
+     "amarelo quando faltou e vermelho quando nada foi guardado."),
+
     ("'Sobrou este m\u00eas' \u00e9 o que sobrou de dinheiro",
      "Os tr\u00eas n\u00fameros do m\u00eas no painel falam do seu dinheiro:\n\n"
      "  Entrou  \u2192 o que caiu nas suas contas\n"

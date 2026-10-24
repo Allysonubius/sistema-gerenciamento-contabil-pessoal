@@ -46,7 +46,7 @@ class Dashboard(ttk.Frame):
             ("a_pagar_30", "Contas a pagar neste mês"),
             ("a_receber_30", "Você tem a receber neste mês"),
             ("orcamento", "Orçamento do mês"),
-            ("metas", "Metas de poupança"),
+            ("poupanca", "Poupança deste mês"),
         ]
         for indice, (chave, rotulo) in enumerate(definicoes):
             cartao = Cartao(grade, rotulo)
@@ -306,18 +306,25 @@ class Dashboard(ttk.Frame):
                 "—", CORES["texto_suave"],
                 "defina seus tetos na tela Orçamento", CORES["texto_suave"])
 
-        metas = resumo["metas"]
-        abertas = [m for m in metas if not m["concluida"]]
-        if metas:
-            guardado = sum(m["guardado"] for m in metas)
-            self.cartoes["metas"].atualizar(
-                services.moeda(guardado), CORES["texto"],
-                f"{len(abertas)} meta(s) em andamento" if abertas
-                else "todas as metas foram alcançadas", CORES["primaria"])
-        else:
-            self.cartoes["metas"].atualizar(
+        # Guardar não é o que sobra depois de gastar: é uma fatia do que entrou.
+        # O cartão compara as duas coisas antes de o mês acabar.
+        poupanca = resumo["poupanca"]
+        if poupanca["situacao"] == "sem_renda":
+            self.cartoes["poupanca"].atualizar(
                 "—", CORES["texto_suave"],
-                "crie uma meta na tela Orçamento", CORES["texto_suave"])
+                "a meta aparece quando o dinheiro entrar", CORES["texto_suave"])
+        else:
+            cores_poupanca = {"em_dia": CORES["sucesso"], "parcial": CORES["alerta"],
+                              "nada": CORES["perigo"]}
+            tom = cores_poupanca[poupanca["situacao"]]
+            if poupanca["situacao"] == "em_dia":
+                nota = (f"{poupanca['do_que_entrou']:.0f}% do que entrou"
+                        f"  ·  meta {poupanca['percentual_meta']:.0f}%")
+            else:
+                nota = (f"faltam {services.moeda(poupanca['falta'])} para"
+                        f" os {poupanca['percentual_meta']:.0f}% do que entrou")
+            self.cartoes["poupanca"].atualizar(
+                services.moeda(poupanca["guardado"]), tom, nota, tom)
 
         # As tabelas abaixo são paginadas: cada Paginacao guarda a lista inteira
         # e chama o método de desenho só com os itens da página escolhida.

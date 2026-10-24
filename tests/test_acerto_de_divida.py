@@ -56,12 +56,53 @@ def test_o_balanco_continua_fechando(sistema, divida):
     assert abs(sistema.balanco("2026-03-31")["diferenca"]) < 0.01
 
 
-def test_acerto_de_conta_de_banco_continua_sendo_ganho_ou_perda(sistema, contas):
-    """Numa conta de dinheiro a diferença é mesmo algo que faltou registrar."""
+def test_acertar_conta_de_banco_tambem_vai_para_o_patrimonio(sistema, contas):
+    """Acertar um saldo nunca é ganho nem gasto, seja dívida ou conta."""
     lancamento = sistema.ajustar_saldo(contas["banco"], 1050.0, "2026-03-10")
 
-    assert "4.3.01" in contas_do_lancamento(sistema, lancamento)
-    assert sistema.dre("2026-03-01", "2026-03-31")["total_receitas"] == 50.0
+    assert "3.1" in contas_do_lancamento(sistema, lancamento)
+    assert "4.3.01" not in contas_do_lancamento(sistema, lancamento)
+    assert sistema.dre("2026-03-01", "2026-03-31")["total_receitas"] == 0.0
+    assert sistema.saldo_conta(contas["banco"]) == 1050.0
+
+
+def test_acerto_de_conta_aparece_separado_no_fluxo(sistema, contas):
+    """O dinheiro mudou na conta, mas não foi recebimento: o painel diz isso."""
+    sistema.ajustar_saldo(contas["banco"], 1050.0, "2026-03-10")
+    fluxo = sistema.fluxo_de_caixa("2026-03-01", "2026-03-31")
+
+    assert fluxo["entradas"] == {"ajustes": 50.0}
+    assert "em acertos" in sistema.detalhe_do_fluxo(fluxo["entradas"])
+
+
+def test_migracao_corrige_os_acertos_de_conta_antigos(sistema, contas):
+    from app import db
+
+    antigo = sistema.salvar_lancamento(
+        None, "2026-03-05", "Acerto de saldo — Banco Teste",
+        [sistema.Partida(contas["banco"], "D", 40.0),
+         sistema.Partida(sistema._conta_por_codigo("4.3.01"), "C", 40.0)])
+    with db.transaction() as conexao:
+        corrigidos = db._reclassificar_acertos_de_saldo(conexao)
+
+    assert corrigidos == 1
+    assert "3.1" in contas_do_lancamento(sistema, antigo)
+    assert sistema.dre("2026-03-01", "2026-03-31")["total_receitas"] == 0.0
+
+
+def test_a_migracao_de_contas_nao_toca_num_gasto_comum(sistema, contas):
+    """'Despesas Diversas pagas pelo banco' tem a mesma forma: o texto separa."""
+    from app import db
+
+    gasto = sistema.salvar_lancamento(
+        None, "2026-03-05", "Taxa do banco",
+        [sistema.Partida(sistema._conta_por_codigo("5.9.01"), "D", 40.0),
+         sistema.Partida(contas["banco"], "C", 40.0)])
+    with db.transaction() as conexao:
+        corrigidos = db._reclassificar_acertos_de_saldo(conexao)
+
+    assert corrigidos == 0
+    assert "5.9.01" in contas_do_lancamento(sistema, gasto)
 
 
 def test_pagar_a_divida_continua_sendo_saida_de_caixa(sistema, contas, divida):
