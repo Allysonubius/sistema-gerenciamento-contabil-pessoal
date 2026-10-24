@@ -403,10 +403,17 @@ def registrar_saldo_inicial(conta_id: int, valor: float, data_iso: str | None = 
 
 
 def ajustar_saldo(conta_id: int, saldo_real: float, data_iso: str | None = None,
-                  motivo: str = "") -> int | None:
+                  motivo: str = "", contra_patrimonio: bool = False) -> int | None:
     """Acerta a conta pelo extrato real, lançando apenas a diferença.
 
     Devolve o id do lançamento criado ou None quando já estava correto.
+
+    ``contra_patrimonio`` muda a conta do outro lado. Numa conta de banco a
+    diferença é mesmo um ganho ou uma perda que faltava registrar. Já corrigir
+    quanto se deve é dizer que o saldo anotado estava errado desde o começo —
+    não se ganhou nem se gastou nada —, e jogar isso em receita ou despesa
+    inflava o mês inteiro: uma dívida acertada em 3.863,71 aparecia como se
+    fosse dinheiro recebido.
     """
     conta = obter_conta(conta_id)
     if conta is None:
@@ -417,10 +424,14 @@ def ajustar_saldo(conta_id: int, saldo_real: float, data_iso: str | None = None,
     if abs(diferenca) < CENTAVO:
         return None
 
-    ajuste = db.query_one("SELECT id FROM conta WHERE codigo = '5.9.01'")
-    ganho = db.query_one("SELECT id FROM conta WHERE codigo = '4.3.01'")
-    if ajuste is None or ganho is None:
-        raise RegraNegocioError("As contas de ajuste (5.9.01 e 4.3.01) não existem.")
+    if contra_patrimonio:
+        patrimonio = conta_patrimonio_inicial()
+        ajuste = ganho = {"id": patrimonio}
+    else:
+        ajuste = db.query_one("SELECT id FROM conta WHERE codigo = '5.9.01'")
+        ganho = db.query_one("SELECT id FROM conta WHERE codigo = '4.3.01'")
+        if ajuste is None or ganho is None:
+            raise RegraNegocioError("As contas de ajuste (5.9.01 e 4.3.01) não existem.")
 
     historico = motivo.strip() or f"Acerto de saldo — {conta['nome']}"
     valor = abs(diferenca)
@@ -1371,8 +1382,11 @@ def alterar_valor_divida(conta_divida_id: int, saldo_real: float,
         raise RegraNegocioError(
             "Para encerrar a dívida use 'Quitar dívida' — assim ela entra no histórico"
             " como paga. Alterar o valor serve só para corrigir quanto você deve.")
+    # Contra o patrimônio, nunca contra receita ou despesa: corrigir quanto se
+    # deve não é ter ganho nem gasto nada neste mês.
     return ajustar_saldo(conta_divida_id, saldo_real, data_iso,
-                         motivo=f"Correção do valor da dívida — {divida['nome']}")
+                         motivo=f"Correção do valor da dívida — {divida['nome']}",
+                         contra_patrimonio=True)
 
 
 # Mantido para não quebrar chamadas antigas; o nome novo diz melhor o que faz.
@@ -4988,6 +5002,143 @@ def previsao_mensal(meses: int | None = None) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- #
+# Fluxo de caixa do período
+# --------------------------------------------------------------------------- #
+# O resultado da DRE (receitas − despesas) responde a uma pergunta boa, mas não
+# é a pergunta do painel. Ele ignora o dinheiro que saiu para pagar dívida ou
+# para virar aplicação, e por isso chegava a dizer que "sobrou" num mês em que a
+# conta terminou vazia. Aqui o retrato é o do dinheiro: saldo no começo mais o
+# que sobrou dá exatamente o saldo de hoje.
+GRUPO_DO_FLUXO = "disponivel"
+
+# Como cada movimento é apresentado, conforme a conta do outro lado.
+ROTULOS_DO_FLUXO = {
+    "gastos": "em gastos",
+    "dividas": "em dívidas",
+    "aplicado": "aplicado",
+    "recebimentos": "recebido",
+    "resgatado": "resgatado",
+    "emprestado": "emprestado",
+    "ajustes": "em acertos",
+}
+
+
+def contas_de_dinheiro() -> list[int]:
+    """As contas que somam em 'dinheiro que você tem hoje'."""
+    return [c["id"] for c in listar_carteiras()
+            if grupo_da_conta(c) == GRUPO_DO_FLUXO]
+
+
+def _classificar_movimento(tipos: dict[str, float], entrada: bool) -> str:
+    """Em que caixinha o movimento entra, pela conta do outro lado."""
+    if not tipos:
+        return "ajustes"
+    dominante = max(tipos, key=lambda t: abs(tipos[t]))
+    if dominante == "DESPESA":
+        return "gastos"
+    if dominante == "RECEITA":
+        return "recebimentos"
+    if dominante == "PASSIVO":
+        return "emprestado" if entrada else "dividas"
+    if dominante == "ATIVO":
+        return "resgatado" if entrada else "aplicado"
+    return "ajustes"
+
+
+def fluxo_de_caixa(desde: str, ate: str) -> dict:
+    """Quanto dinheiro entrou e saiu das contas no período, e por quê.
+
+    Transferência entre duas contas de dinheiro não conta como entrada nem como
+    saída: o dinheiro só mudou de lugar. Por isso cada lançamento é medido pelo
+    efeito líquido que teve sobre o conjunto das contas.
+    """
+    vazio = {
+        "entrou": 0.0, "saiu": 0.0, "sobrou": 0.0,
+        "saldo_inicial": 0.0, "saldo_final": 0.0,
+        "entradas": {}, "saidas": {},
+        "receitas_fora": 0.0, "despesas_fora": 0.0,
+    }
+    contas = contas_de_dinheiro()
+    if not contas:
+        return vazio
+    marcadores = ",".join("?" * len(contas))
+
+    saldo_inicial = round(
+        sum(saldo_conta(conta, ate=_dia_anterior(desde)) for conta in contas), 2)
+
+    efeitos = {
+        linha["id"]: round(float(linha["efeito"]), 2)
+        for linha in db.query(
+            "SELECT l.id, SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS efeito"
+            " FROM lancamento l JOIN partida p ON p.lancamento_id = l.id"
+            f" WHERE p.conta_id IN ({marcadores}) AND l.data BETWEEN ? AND ?"
+            " GROUP BY l.id", tuple(contas) + (desde, ate))
+    }
+
+    contrapartidas: dict[int, dict[str, float]] = {}
+    for linha in db.query(
+            "SELECT p.lancamento_id AS id, c.tipo,"
+            " SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS valor"
+            " FROM partida p JOIN conta c ON c.id = p.conta_id"
+            " JOIN lancamento l ON l.id = p.lancamento_id"
+            f" WHERE p.conta_id NOT IN ({marcadores}) AND l.data BETWEEN ? AND ?"
+            " GROUP BY p.lancamento_id, c.tipo", tuple(contas) + (desde, ate)):
+        if linha["id"] in efeitos:
+            contrapartidas.setdefault(linha["id"], {})[linha["tipo"]] = float(linha["valor"])
+
+    entrou = saiu = 0.0
+    entradas: dict[str, float] = {}
+    saidas: dict[str, float] = {}
+    for lancamento_id, efeito in efeitos.items():
+        if abs(efeito) <= CENTAVO:
+            continue                       # transferência entre contas de dinheiro
+        caixa = _classificar_movimento(contrapartidas.get(lancamento_id, {}), efeito > 0)
+        if efeito > 0:
+            entrou += efeito
+            entradas[caixa] = round(entradas.get(caixa, 0.0) + efeito, 2)
+        else:
+            saiu += -efeito
+            saidas[caixa] = round(saidas.get(caixa, 0.0) - efeito, 2)
+
+    entrou, saiu = round(entrou, 2), round(saiu, 2)
+
+    # O que aconteceu longe das contas de dinheiro: gasto pago com saldo de
+    # loja, rendimento que ficou dentro da aplicação. Fica visível para o
+    # painel poder explicar por que a DRE e o caixa não dão o mesmo número.
+    fora = db.query_one(
+        "SELECT"
+        " COALESCE(SUM(CASE WHEN c.tipo='RECEITA' THEN p.valor ELSE 0 END),0) AS receitas,"
+        " COALESCE(SUM(CASE WHEN c.tipo='DESPESA' THEN p.valor ELSE 0 END),0) AS despesas"
+        " FROM partida p JOIN conta c ON c.id = p.conta_id"
+        " JOIN lancamento l ON l.id = p.lancamento_id"
+        " WHERE l.data BETWEEN ? AND ? AND c.tipo IN ('RECEITA','DESPESA')"
+        "   AND p.tipo = (CASE WHEN c.tipo='RECEITA' THEN 'C' ELSE 'D' END)"
+        "   AND NOT EXISTS (SELECT 1 FROM partida q WHERE q.lancamento_id = l.id"
+        f"                  AND q.conta_id IN ({marcadores}))",
+        (desde, ate) + tuple(contas))
+
+    return {
+        "entrou": entrou,
+        "saiu": saiu,
+        "sobrou": round(entrou - saiu, 2),
+        "saldo_inicial": saldo_inicial,
+        "saldo_final": round(saldo_inicial + entrou - saiu, 2),
+        "entradas": entradas,
+        "saidas": saidas,
+        "receitas_fora": round(float(fora["receitas"]), 2),
+        "despesas_fora": round(float(fora["despesas"]), 2),
+    }
+
+
+def detalhe_do_fluxo(parcelas: dict[str, float], limite: int = 3) -> str:
+    """Resume as caixinhas em uma linha: '1.916,26 em gastos · 440,00 em dívidas'."""
+    maiores = sorted(parcelas.items(), key=lambda item: -item[1])[:limite]
+    return "  ·  ".join(
+        f"{moeda(valor)} {ROTULOS_DO_FLUXO.get(caixa, caixa)}"
+        for caixa, valor in maiores if valor > CENTAVO)
+
+
+# --------------------------------------------------------------------------- #
 # Painel
 # --------------------------------------------------------------------------- #
 def resumo_dashboard() -> dict:
@@ -5019,7 +5170,14 @@ def resumo_dashboard() -> dict:
         return round(float(row["t"]), 2)
 
     anterior_ref = date.fromisoformat(inicio) - timedelta(days=1)
-    mes_anterior = dre(primeiro_dia_mes(anterior_ref), ultimo_dia_mes(anterior_ref))
+    inicio_anterior = primeiro_dia_mes(anterior_ref)
+    fim_anterior = ultimo_dia_mes(anterior_ref)
+    mes_anterior = dre(inicio_anterior, fim_anterior)
+
+    # O painel fala de dinheiro: o que entrou e saiu das contas até hoje. O
+    # resultado da DRE continua ali embaixo, para quem quiser os dois retratos.
+    fluxo = fluxo_de_caixa(inicio, hoje)
+    fluxo_anterior = fluxo_de_caixa(inicio_anterior, fim_anterior)
 
     def variacao(atual: float, passado: float) -> float | None:
         if abs(passado) < CENTAVO:
@@ -5077,14 +5235,22 @@ def resumo_dashboard() -> dict:
         "receitas_mes_anterior": mes_anterior["total_receitas"],
         "despesas_mes_anterior": mes_anterior["total_despesas"],
         "resultado_mes_anterior": mes_anterior["resultado"],
-        "var_receitas": variacao(mes["total_receitas"], mes_anterior["total_receitas"]),
-        "var_despesas": variacao(mes["total_despesas"], mes_anterior["total_despesas"]),
-        "var_resultado": variacao(mes["resultado"], mes_anterior["resultado"]),
+        "var_receitas": variacao(fluxo["entrou"], fluxo_anterior["entrou"]),
+        "var_despesas": variacao(fluxo["saiu"], fluxo_anterior["saiu"]),
+        "var_resultado": variacao(fluxo["sobrou"], fluxo_anterior["sobrou"]),
         "orcamento_previsto": orcamento["previsto"],
         "orcamento_gasto": orcamento["gasto"],
         "orcamento_percentual": orcamento["percentual"],
         "categorias_estouradas": len(orcamento["estouradas"]),
         "metas_abertas": len(metas_abertas),
+        # Caixa: é o que o painel mostra, porque fecha com o saldo das contas.
+        "fluxo": fluxo,
+        "entrou_mes": fluxo["entrou"],
+        "saiu_mes": fluxo["saiu"],
+        "sobrou_mes": fluxo["sobrou"],
+        "saldo_inicio_mes": fluxo["saldo_inicial"],
+        # Competência: ganhos e gastos do mês, independentemente de quando o
+        # dinheiro circulou. Responde "ganhei mais do que gastei?".
         "receitas_mes": mes["total_receitas"],
         "despesas_mes": mes["total_despesas"],
         "resultado_mes": mes["resultado"],

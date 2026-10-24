@@ -14,7 +14,7 @@ from typing import Iterator
 
 from app.config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -572,9 +572,70 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(f"UPDATE conta SET eh_carteira = 1 WHERE codigo IN ({marcadores})",
                      CODIGOS_CARTEIRA)
 
+    if versao < 15:
+        # v15: corrigir o valor de uma dívida nunca foi receita nem despesa.
+        #
+        # Esses acertos iam para "Despesas Diversas" (5.9.01) ou "Reembolsos e
+        # Restituições" (4.3.01), misturando-se ao que foi de fato gasto e
+        # recebido. Uma dívida acertada em 3.863,71 entrava no mês como se
+        # fosse dinheiro que entrou. A contrapartida certa é o Patrimônio
+        # Inicial, a mesma de um saldo inicial: o que mudou foi a anotação,
+        # não o dinheiro.
+        #
+        # O filtro é estreito de propósito — exatamente a forma que
+        # `alterar_valor_divida` gerava: dois lançamentos, um deles numa
+        # dívida que não é cartão, o outro numa das duas contas de acerto.
+        _reclassificar_acertos_de_divida(conn)
+
     if versao < SCHEMA_VERSION:
         conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
     conn.commit()
+
+
+def _reclassificar_acertos_de_divida(conn: sqlite3.Connection) -> int:
+    """Manda os acertos de saldo de dívida para o Patrimônio Inicial.
+
+    Ver a migração v15. Devolve quantos lançamentos foram corrigidos.
+    """
+    patrimonio = conn.execute("SELECT id FROM conta WHERE codigo = '3.1'").fetchone()
+    if patrimonio is None:
+        return 0
+
+    alvos = conn.execute(
+        "SELECT l.id FROM lancamento l"
+        " WHERE l.origem = 'MANUAL'"
+        "   AND (SELECT COUNT(*) FROM partida p WHERE p.lancamento_id = l.id) = 2"
+        "   AND EXISTS (SELECT 1 FROM partida p JOIN conta c ON c.id = p.conta_id"
+        "               WHERE p.lancamento_id = l.id AND c.tipo = 'PASSIVO'"
+        "                 AND c.dia_fechamento IS NULL)"
+        "   AND EXISTS (SELECT 1 FROM partida p JOIN conta c ON c.id = p.conta_id"
+        "               WHERE p.lancamento_id = l.id AND c.codigo IN ('5.9.01','4.3.01'))"
+    ).fetchall()
+    if not alvos:
+        return 0
+
+    agora = datetime.now().isoformat(timespec="seconds")
+    for alvo in alvos:
+        antes = conn.execute(
+            "SELECT c.codigo, c.nome, p.tipo, p.valor FROM partida p"
+            " JOIN conta c ON c.id = p.conta_id WHERE p.lancamento_id = ?"
+            " ORDER BY p.tipo DESC, p.id", (alvo["id"],)).fetchall()
+        lanc = conn.execute("SELECT * FROM lancamento WHERE id = ?", (alvo["id"],)).fetchone()
+        resumo = " | ".join(
+            f"{linha['tipo']} {linha['codigo']} {linha['nome']} {float(linha['valor']):.2f}"
+            for linha in antes)
+        conn.execute(
+            "INSERT INTO lancamento_historico (lancamento_id, acao, quando, data, historico,"
+            " documento, valor, partidas, motivo) VALUES (?,?,?,?,?,?,?,?,?)",
+            (alvo["id"], "ALTERADO", agora, lanc["data"], lanc["historico"],
+             lanc["documento"], float(lanc["valor"]), resumo,
+             "acerto de dívida reclassificado para o patrimônio"))
+        conn.execute(
+            "UPDATE partida SET conta_id = ? WHERE lancamento_id = ?"
+            "  AND conta_id IN (SELECT id FROM conta WHERE codigo IN ('5.9.01','4.3.01'))",
+            (patrimonio["id"], alvo["id"]))
+        conn.execute("UPDATE lancamento SET alterado_em = ? WHERE id = ?", (agora, alvo["id"]))
+    return len(alvos)
 
 
 def _seed(conn: sqlite3.Connection) -> None:

@@ -176,6 +176,18 @@ TOPICOS: list[tuple[str, str]] = [
      "Um gasto que nasceu do pagamento de um boleto não pode ser apagado na tela de\n"
      "Entradas e Saídas. Volte ao boleto e clique em 'Desfazer pagamento'."),
 
+    ("'Sobrou este m\u00eas' \u00e9 o que sobrou de dinheiro",
+     "Os tr\u00eas n\u00fameros do m\u00eas no painel falam do seu dinheiro:\n\n"
+     "  Entrou  \u2192 o que caiu nas suas contas\n"
+     "  Saiu    \u2192 o que saiu delas\n"
+     "  Sobrou  \u2192 a diferen\u00e7a entre os dois\n\n"
+     "A conta sempre fecha: o saldo do come\u00e7o do m\u00eas mais o que sobrou d\u00e1 exatamente o\n"
+     "dinheiro que voc\u00ea tem hoje.\n\n"
+     "Repare que 'Saiu' inclui o que foi pagar d\u00edvida e o que virou aplica\u00e7\u00e3o \u2014 n\u00e3o s\u00f3\n"
+     "os gastos. Quando isso acontece, o pr\u00f3prio cart\u00e3o mostra a divis\u00e3o embaixo.\n\n"
+     "Para ver ganhos e gastos do m\u00eas sem olhar o caixa, use\n"
+     "'Relat\u00f3rios \u2192 Ganhos e gastos'."),
+
     ("Guardar o comprovante de um registro",
      "Na tela 'Entradas e Saídas', escolha a linha e clique em 'Comprovantes'.\n"
      "Dá para anexar a nota, o boleto ou o recibo — PDF, foto ou planilha.\n\n"

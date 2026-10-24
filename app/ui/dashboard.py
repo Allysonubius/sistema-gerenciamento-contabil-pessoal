@@ -39,9 +39,9 @@ class Dashboard(ttk.Frame):
             ("investido", "Aplicado em investimentos"),
             ("dividas", "Total que você deve"),
             ("patrimonio_liquido", "Seu patrimônio"),
-            ("receitas_mes", "Entrou este mês"),
-            ("despesas_mes", "Saiu este mês"),
-            ("resultado_mes", "Sobrou este mês"),
+            ("entrou_mes", "Entrou este mês"),
+            ("saiu_mes", "Saiu este mês"),
+            ("sobrou_mes", "Sobrou este mês"),
             ("previsto", "Previsão para o fim do mês"),
             ("a_pagar_30", "Contas a pagar neste mês"),
             ("a_receber_30", "Você tem a receber neste mês"),
@@ -238,11 +238,16 @@ class Dashboard(ttk.Frame):
             CORES["perigo"] if negativas else cor(previsto), nota,
             CORES["perigo"] if negativas else CORES["primaria"])
 
-        sobrou = resumo["resultado_mes"]
-        self.cartoes["resultado_mes"].atualizar(
+        # Os três cartões do mês falam de dinheiro, não de competência: o que
+        # entrou nas contas, o que saiu delas e a diferença. Assim o número
+        # fecha com o saldo — antes dizia que havia sobrado 459,48 num mês que
+        # terminou com 8,99 na conta.
+        fluxo = resumo["fluxo"]
+        sobrou = fluxo["sobrou"]
+        self.cartoes["sobrou_mes"].atualizar(
             services.moeda(sobrou), cor(sobrou),
-            "você gastou menos do que recebeu" if sobrou >= 0
-            else "atenção: você gastou mais do que recebeu")
+            f"você tinha {services.moeda(fluxo['saldo_inicial'])}"
+            f" e tem {services.moeda(fluxo['saldo_final'])} hoje")
 
         def comparacao(variacao: float | None, para_gasto: bool) -> str:
             if variacao is None:
@@ -252,12 +257,22 @@ class Dashboard(ttk.Frame):
             palavra = "a mais" if variacao > 0 else "a menos"
             return f"{abs(variacao):.0f}% {palavra} que no mês passado"
 
-        self.cartoes["receitas_mes"].atualizar(
-            services.moeda(resumo["receitas_mes"]), CORES["sucesso"],
-            comparacao(resumo["var_receitas"], False))
-        self.cartoes["despesas_mes"].atualizar(
-            services.moeda(resumo["despesas_mes"]), CORES["perigo"],
-            comparacao(resumo["var_despesas"], True))
+        # Quando tudo foi recebimento e gasto comum, o mais útil é comparar com
+        # o mês passado. Quando parte do dinheiro saiu para pagar dívida ou
+        # virar aplicação, o útil é dizer isso: é o que explica a diferença
+        # entre o que se gastou e o que sobrou.
+        def nota(parcelas: dict, comum: str, variacao: float | None,
+                 para_gasto: bool) -> str:
+            if set(parcelas) - {comum}:
+                return services.detalhe_do_fluxo(parcelas)
+            return comparacao(variacao, para_gasto)
+
+        self.cartoes["entrou_mes"].atualizar(
+            services.moeda(fluxo["entrou"]), CORES["sucesso"],
+            nota(fluxo["entradas"], "recebimentos", resumo["var_receitas"], False))
+        self.cartoes["saiu_mes"].atualizar(
+            services.moeda(fluxo["saiu"]), CORES["perigo"],
+            nota(fluxo["saidas"], "gastos", resumo["var_despesas"], True))
 
         vencidos_p = resumo["vencidos_pagar"]
         self.cartoes["a_pagar_30"].atualizar(

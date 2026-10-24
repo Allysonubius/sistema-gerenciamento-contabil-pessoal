@@ -71,9 +71,9 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 400 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 420 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
-fechamento de competência, trilha de alterações e comprovantes.
+fechamento de competência, trilha de alterações, comprovantes e fluxo de caixa.
 Cada teste roda num banco temporário próprio — os seus dados nunca são tocados.
 
 ## Privacidade e o que não está aqui
@@ -250,6 +250,41 @@ Price**, cria todas as parcelas em Contas a Pagar e mantém uma conta de dívida
 Cada parcela é lançada separando **juros** (despesa financeira) de **amortização** (abate
 da dívida), de modo que o saldo devedor cai sozinho a cada pagamento. "Ver parcelas"
 mostra o plano completo, com quanto ainda falta quitar depois de cada uma.
+
+## O painel fala de dinheiro
+
+Os três cartões do mês — *Entrou*, *Saiu* e *Sobrou* — mostram o **fluxo de caixa**: o que
+entrou nas contas, o que saiu delas e a diferença. O número fecha com o saldo, sempre:
+
+```
+saldo no começo do mês  +  sobrou  =  dinheiro que você tem hoje
+```
+
+Antes esses cartões vinham da DRE (receitas − despesas) e ignoravam o dinheiro que saiu
+para **pagar dívida** ou para **virar aplicação** — dava para o painel anunciar que haviam
+sobrado R$ 459,48 num mês que terminou com R$ 8,99 na conta. Quando parte das saídas não foi
+gasto comum, o próprio cartão diz por quê: *1.916,26 em gastos · 440,00 em dívidas · 115,00
+aplicado*.
+
+Transferência entre duas contas de dinheiro não conta como entrada nem como saída: cada
+lançamento é medido pelo efeito líquido sobre o conjunto das contas.
+
+O retrato por competência (ganhei mais do que gastei?) continua inteiro em
+`Relatórios → Ganhos e gastos` e em `Ano a ano`.
+
+## Acertar uma dívida não é ganho nem gasto
+
+Corrigir quanto se deve é dizer que o saldo anotado estava errado — não se ganhou nem se
+gastou nada. Esses acertos iam para *Despesas Diversas* e *Reembolsos e Restituições*, e se
+misturavam ao que foi de fato gasto e recebido: uma dívida acertada em R$ 3.863,71 entrava
+no mês como se fosse dinheiro recebido.
+
+A contrapartida passou a ser o **Patrimônio Inicial**, a mesma de um saldo inicial. A
+migração v15 reclassifica os acertos já gravados e registra cada um na trilha de
+alterações, com o estado anterior.
+
+O acerto de uma **conta de banco** continua sendo ganho ou perda: ali a diferença é mesmo
+algo que faltou registrar.
 
 ## Fechamento de competência
 
