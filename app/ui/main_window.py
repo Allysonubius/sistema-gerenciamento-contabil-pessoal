@@ -51,11 +51,26 @@ INTERVALO_BACKUP_MS = 30 * 60 * 1000
 class Aplicacao(tk.Tk):
     def __init__(self, iniciar_minimizado: bool = False):
         super().__init__()
+        # A janela nasce escondida: nenhum número aparece antes da senha.
+        self.withdraw()
         self.title(f"{APP_NAME} — DEMONSTRAÇÃO (dados fictícios)" if modo_demonstracao()
                    else APP_NAME)
-        self._abrir_no_monitor()
         theme.aplicar(self)
         self._definir_icone()
+
+        # Abrindo junto com o Windows a senha fica para quando a janela for
+        # chamada: pedi-la a cada boot, numa janela que nem vai aparecer, só
+        # ensinaria o usuário a desligar uma das duas coisas.
+        self._porta_aberta = False
+        self.liberado = True
+        if not iniciar_minimizado:
+            self.liberado = self._abrir_a_porta()
+            if not self.liberado:
+                return
+
+        self._abrir_no_monitor()
+        if not iniciar_minimizado:
+            self.deiconify()
 
         self._telas: dict[str, ttk.Frame] = {}
         self._areas: dict[str, AreaRolavel] = {}
@@ -76,6 +91,8 @@ class Aplicacao(tk.Tk):
 
         self._rotinas_de_abertura()
         self.mostrar(INICIO)
+        self._cuidar_da_instalacao()
+        self._vigiar_versao_nova()
         self._vigiar_segunda_abertura()
         self._vigiar_backup()
         self._dia_em_tela = date.today()
@@ -201,7 +218,24 @@ class Aplicacao(tk.Tk):
             pass
 
     def _montar_layout(self) -> None:
-        container = ttk.Frame(self)
+        # Faixa do aviso de versão nova: construída escondida, aparece acima de
+        # tudo quando há novidade e some assim que o usuário resolve.
+        self.faixa_novidade = tk.Frame(self, bg=CORES["alerta"])
+        self.lbl_novidade = tk.Label(self.faixa_novidade, text="", bg=CORES["alerta"],
+                                     fg="#1f2937", font=(theme.FONTE, 10, "bold"),
+                                     anchor="w", padx=10, pady=8)
+        self.lbl_novidade.pack(side="left")
+        for texto, acao in (("Dispensar", self._esconder_faixa),
+                            ("Não avisar desta versão", self._ignorar_versao),
+                            ("Ver o que mudou", self.abrir_pagina_da_versao)):
+            tk.Button(self.faixa_novidade, text=texto, command=acao,
+                      bg=CORES["alerta"], fg="#1f2937", relief="flat",
+                      font=(theme.FONTE, 9), cursor="hand2",
+                      activebackground=CORES["alerta"]).pack(side="right", padx=6)
+
+        self.corpo = ttk.Frame(self)
+        self.corpo.pack(fill="both", expand=True)
+        container = ttk.Frame(self.corpo)
         container.pack(fill="both", expand=True)
 
         lateral = tk.Frame(container, bg=CORES["barra"], width=246)
@@ -265,6 +299,16 @@ class Aplicacao(tk.Tk):
         self.lbl_status.pack(fill="x")
         tk.Label(rodape, text=f"versão {APP_VERSION}", bg=CORES["barra"], fg="#475569",
                  font=(theme.FONTE, 8), anchor="w", padx=8).pack(fill="x", pady=(4, 0))
+
+    def _abrir_a_porta(self) -> bool:
+        """Pede (ou cria) a senha. False quando o usuário desistiu de entrar."""
+        if modo_demonstracao():
+            self._porta_aberta = True
+            return True
+        from app.ui.senha import abrir_porta
+
+        self._porta_aberta = abrir_porta(self)
+        return self._porta_aberta
 
     def _montar_bandeja(self) -> None:
         self.bandeja = BandejaSistema(
@@ -343,6 +387,122 @@ class Aplicacao(tk.Tk):
                 reacertados += bool(filtro.revalidar())
         return reacertados
 
+    # ------------------------------------------------------------------ #
+    def _vigiar_versao_nova(self) -> None:
+        """Pergunta ao GitHub, numa linha separada, se saiu versão nova.
+
+        Em linha separada porque a consulta vai à rede: numa máquina sem
+        internet o programa esperaria o tempo limite inteiro antes de desenhar
+        a primeira tela.
+        """
+        from app import atualizacao
+
+        if not atualizacao.esta_na_hora():
+            if atualizacao.deve_avisar():
+                self.after(1500, self._anunciar_versao_nova)
+            return
+
+        import threading
+
+        def consultar() -> None:
+            estado = atualizacao.verificar()
+            if estado["ha_novidade"] and not estado["ignorada"]:
+                self.after(0, self._anunciar_versao_nova)
+
+        threading.Thread(target=consultar, daemon=True, name="versao").start()
+
+    def _anunciar_versao_nova(self) -> None:
+        """Mostra a faixa no topo e avisa também pelo ícone do relógio."""
+        if self._encerrando:
+            return
+        from app import atualizacao
+
+        estado = atualizacao.estado_guardado()
+        if not estado["ha_novidade"] or estado["ignorada"]:
+            return
+        self.lbl_novidade.configure(
+            text=f"  Saiu a versão {estado['disponivel']} — você está na"
+                 f" {estado['atual']}.")
+        self.faixa_novidade.pack(fill="x", before=self.corpo, side="top")
+        self.bandeja.notificar(
+            f"A versão {estado['disponivel']} está disponível para baixar.")
+
+    def _esconder_faixa(self) -> None:
+        self.faixa_novidade.pack_forget()
+
+    def _ignorar_versao(self) -> None:
+        from app import atualizacao
+
+        atualizacao.ignorar(atualizacao.estado_guardado()["disponivel"])
+        self._esconder_faixa()
+        self.notificar("Tudo bem — aviso de novo quando sair outra versão.")
+
+    def abrir_pagina_da_versao(self) -> None:
+        import webbrowser
+
+        from app import atualizacao
+
+        webbrowser.open(atualizacao.estado_guardado()["pagina"])
+
+    # ------------------------------------------------------------------ #
+    def _cuidar_da_instalacao(self) -> None:
+        """Limpa restos da última troca e convida a instalar, uma vez só."""
+        from app import instalacao
+
+        try:
+            instalacao.limpar_restos()
+        except Exception:  # pragma: no cover - nunca atrapalhar a abertura
+            import logging
+            logging.exception("Falha ao limpar restos da instalação")
+        if instalacao.deve_oferecer_instalacao():
+            self.after(900, self._convidar_a_instalar)
+
+    def _convidar_a_instalar(self) -> None:
+        from app import instalacao
+
+        if self._encerrando or not instalacao.deve_oferecer_instalacao():
+            return
+        resposta = messagebox.askyesno(
+            "Instalar no computador",
+            "Você está rodando o programa direto do arquivo baixado.\n\n"
+            "Posso instalá-lo neste computador? Ele passa a ter atalho no menu"
+            " Iniciar e na área de trabalho, aparece na lista de aplicativos do"
+            " Windows e deixa de depender de onde o arquivo está guardado.\n\n"
+            "Não precisa de administrador, e os seus dados não mudam de lugar.",
+            parent=self)
+        if not resposta:
+            instalacao.recusar_convite()
+            return
+        self.instalar_no_computador()
+
+    def instalar_no_computador(self) -> None:
+        """Copia o programa para a pasta do usuário e reabre a partir dela."""
+        from app import instalacao
+
+        try:
+            resultado = instalacao.instalar()
+        except (RuntimeError, OSError) as erro:
+            messagebox.showwarning("Não foi possível instalar", str(erro), parent=self)
+            return
+
+        destino = resultado["caminho"]
+        if not messagebox.askyesno(
+                "Pronto",
+                f"Instalado em:\n{destino}\n\n"
+                "Quer que eu feche esta janela e abra a cópia instalada agora?",
+                parent=self):
+            self.notificar("Programa instalado neste computador.")
+            return
+        import subprocess
+
+        try:
+            subprocess.Popen([str(destino)], close_fds=True)
+        except OSError as erro:
+            messagebox.showwarning("Não foi possível abrir", str(erro), parent=self)
+            return
+        self._encerrando = True
+        self.encerrar()
+
     def atualizar_dependentes(self) -> None:
         """Mantém o painel coerente depois de gravações em outras telas."""
         if self._tela_atual == INICIO:
@@ -401,6 +561,9 @@ class Aplicacao(tk.Tk):
         self.bandeja.notificar("O sistema continua aberto aqui, perto do relógio.")
 
     def restaurar_da_bandeja(self) -> None:
+        # Quem abriu junto com o Windows ainda não passou pela senha.
+        if not self._porta_aberta and not self._abrir_a_porta():
+            return
         # Voltar da bandeja refaz as contas da tela: o programa costuma passar
         # dias aberto, e números de ontem não servem para decidir nada hoje.
         self.recarregar_tela_atual()

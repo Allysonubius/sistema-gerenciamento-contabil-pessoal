@@ -71,10 +71,10 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 456 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 527 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
-fechamento de competência, trilha de alterações, comprovantes, fluxo de caixa, poupança e a
-virada do mês.
+fechamento de competência, trilha de alterações, comprovantes, fluxo de caixa, poupança, a virada
+do mês, a senha de abertura, a instalação e o aviso de versão.
 Cada teste roda num banco temporário próprio — os seus dados nunca são tocados.
 
 ## Privacidade e o que não está aqui
@@ -100,7 +100,7 @@ Este repositório contém **apenas o código**. Ficam de fora, pelo `.gitignore`
 | **Orçamento** | Teto mensal por categoria, com consumo, ritmo e projeção; a poupança do mês (meta como fatia do que entrou) e os objetivos de poupança. |
 | **Contas e Categorias** | Contas de dinheiro (banco, carteira, cartão) e categorias de ganho/gasto — 67 já vêm prontas. |
 | **Relatórios** | Mês a mês, **Ano a ano**, Categorias mês a mês, Resumo por conta (balancete), Extrato (razão), Ganhos e gastos (DRE), Meu patrimônio (balanço), Histórico completo (diário) e Previsão de saldo. |
-| **Ajustes** | Preferências, cópias de segurança, restauração, exportação, conferência dos dados, **fechamento de competência** e **trilha de alterações**. |
+| **Ajustes** | Preferências, cópias de segurança, restauração, exportação, conferência dos dados, fechamento de competência, trilha de alterações, **senha, instalação e versão**. |
 
 Não há barra de menu no topo: toda a navegação está no menu lateral, e as ações de cada
 tela ficam no cabeçalho dela.
@@ -287,6 +287,65 @@ registram cada um na trilha de alterações, com o estado anterior. No fluxo de 
 aparecem numa caixinha própria, *em acertos*, em vez de se esconderem entre os
 recebimentos.
 
+## Instalar no computador
+
+Na primeira vez que o `.exe` baixado é aberto, o programa oferece instalar-se. A
+instalação é **só do usuário** e não pede administrador:
+
+- copia o executável para `%LOCALAPPDATA%\Programs\SistemaContabil`;
+- cria atalho no menu Iniciar e na área de trabalho;
+- cadastra o programa em *Aplicativos instalados* do Windows, com desinstalador.
+
+Os seus dados **não** moram ali: ficam em `%LOCALAPPDATA%\SistemaContabil` e sobrevivem a
+instalar, desinstalar e reinstalar. Desinstalar pergunta, em separado, se os registros
+também devem ir embora — a resposta padrão é mantê-los.
+
+O **modo portátil** (`portable.flag` ao lado do `.exe`) nunca é convidado a instalar: ali o
+programa e os dados andam juntos de propósito.
+
+## Senha de abertura
+
+Na primeira abertura o programa pede para criar uma senha, e a exige nas seguintes.
+
+**O que ela é:** uma tranca na porta. Quem senta no seu computador não abre o programa nem
+vê os seus números.
+
+**O que ela não é:** criptografia. O arquivo do banco continua legível por quem tiver
+acesso a ele e souber abrir um SQLite. Isso está dito aqui, na tela de criação e em
+Ajustes de propósito — uma tranca anunciada como cofre é pior do que nenhuma, porque faz
+a pessoa guardar coisas que não guardaria.
+
+**Presa a este computador:** o identificador da máquina (o `MachineGuid` do Windows) entra
+na conta que gera o hash. O banco copiado para outro computador não abre com a mesma
+senha — e o programa diz exatamente isso, em vez de fingir que a senha está errada.
+
+A senha é guardada como PBKDF2-HMAC-SHA256, 240 mil iterações, com sal sorteado a cada
+vez; a comparação é em tempo constante e cada erro aumenta a espera, até meio minuto.
+
+**Esqueceu?** Há um caminho de volta, e ele está à vista: digitar `APAGAR SENHA` remove a
+tranca. Esconder essa saída não protegeria nada — quem tem o arquivo já tem os números —
+e só criaria o risco de você ficar trancado para fora da sua própria vida financeira.
+
+Quem abre junto com o Windows não é interrompido no boot: a senha só é pedida quando a
+janela for chamada de volta do relógio.
+
+## Aviso de versão nova
+
+Uma vez por dia, numa linha separada para não segurar a abertura, o programa pergunta à
+API pública de releases do GitHub se saiu versão nova. Sem token, sem cadastro, sem
+telemetria: a única coisa que sai daqui é a pergunta "qual é a última versão".
+
+Havendo novidade, aparece uma faixa no topo da janela e um aviso perto do relógio, com
+três saídas: *Ver o que mudou*, *Dispensar* e *Não avisar desta versão*. Em Ajustes dá
+para procurar na hora ou desligar a conferência.
+
+O programa **não se atualiza sozinho** — e isso é escolha, não falta: saber que a versão
+mudou vale mais do que descobrir depois que alguma coisa já está diferente na tela.
+Atualizar é baixar o `.exe` novo e abrir: ele se instala por cima, e os dados ficam onde
+estavam.
+
+Sem internet, nada disso aparece e nada trava.
+
 ## Poupança do mês
 
 Guardar o que sobra é não guardar nada: num mês apertado sobra zero e a poupança some. A
@@ -428,6 +487,9 @@ sistemacontabil/
     ├── db.py                SQLite: esquema, migração, carga inicial, backup
     ├── services.py          regras de negócio, tradução dos lançamentos e relatórios
     ├── instancia.py         garante uma única janela aberta
+    ├── seguranca.py         senha de abertura, presa a este computador
+    ├── instalacao.py        instalar, desinstalar e atalhos do Windows
+    ├── atualizacao.py       aviso de versão nova (releases do GitHub)
     ├── importacao.py        leitura de OFX/CSV e sugestão de categoria
     ├── tray.py              ícone da bandeja (pystray)
     └── ui/

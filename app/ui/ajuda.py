@@ -176,6 +176,38 @@ TOPICOS: list[tuple[str, str]] = [
      "Um gasto que nasceu do pagamento de um boleto não pode ser apagado na tela de\n"
      "Entradas e Saídas. Volte ao boleto e clique em 'Desfazer pagamento'."),
 
+    ("Senha para abrir o programa",
+     "Na primeira vez o programa pede para voc\u00ea criar uma senha, e a pede toda vez\n"
+     "que abrir depois disso.\n\n"
+     "O que ela faz: impede que algu\u00e9m sente no seu computador e veja os seus n\u00fameros.\n\n"
+     "O que ela n\u00e3o faz: n\u00e3o embaralha o arquivo dos seus dados. Quem tiver acesso ao\n"
+     "arquivo e souber abrir um banco SQLite ainda l\u00ea o conte\u00fado. \u00c9 uma tranca na\n"
+     "porta, n\u00e3o um cofre.\n\n"
+     "A senha vale s\u00f3 neste computador: levar os dados para outra m\u00e1quina e digitar a\n"
+     "mesma senha n\u00e3o abre.\n\n"
+     "Esqueceu? Na tela de entrada, 'Esqueci a senha' remove a tranca. Os seus dados\n"
+     "n\u00e3o se perdem \u2014 eles continuam inteiros do outro lado da porta.\n\n"
+     "Em 'Ajustes' d\u00e1 para trocar ou tirar a senha."),
+
+    ("Instalar o programa no computador",
+     "Na primeira vez que voc\u00ea abre o arquivo baixado, o programa oferece instalar-se.\n\n"
+     "Aceitando, ele ganha atalho no menu Iniciar e na \u00e1rea de trabalho, aparece na\n"
+     "lista de aplicativos do Windows e deixa de depender de onde voc\u00ea guardou o\n"
+     "arquivo. N\u00e3o precisa de administrador.\n\n"
+     "Os seus dados n\u00e3o mudam de lugar e sobrevivem a desinstalar e reinstalar.\n\n"
+     "Para remover: Configura\u00e7\u00f5es do Windows, Aplicativos instalados. Ele pergunta,\n"
+     "em separado, se os seus registros tamb\u00e9m devem ser apagados."),
+
+    ("Saber quando sai uma vers\u00e3o nova",
+     "Uma vez por dia o programa pergunta ao GitHub se saiu vers\u00e3o nova. Havendo,\n"
+     "aparece uma faixa no topo da janela e um aviso perto do rel\u00f3gio.\n\n"
+     "Ele n\u00e3o se atualiza sozinho, de prop\u00f3sito: saber que a vers\u00e3o mudou vale mais\n"
+     "do que descobrir depois que alguma coisa j\u00e1 est\u00e1 diferente na tela.\n\n"
+     "Para atualizar, clique em 'Ver o que mudou', baixe o arquivo novo e abra: ele\n"
+     "se instala por cima e os seus dados ficam onde estavam.\n\n"
+     "Em 'Ajustes' d\u00e1 para procurar na hora ou desligar a confer\u00eancia. Sem internet,\n"
+     "nada disso aparece e nada trava."),
+
     ("Guardar uma parte do que entra todo m\u00eas",
      "Guardar o que sobra \u00e9 n\u00e3o guardar nada: num m\u00eas apertado sobra zero.\n\n"
      "Por isso a meta \u00e9 uma fatia do que entrou \u2014 10% por padr\u00e3o. Recebeu menos, a meta\n"

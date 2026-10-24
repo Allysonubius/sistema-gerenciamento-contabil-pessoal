@@ -24,7 +24,8 @@ def sistema(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
     # Recarrega a cadeia de módulos para que os caminhos sejam relidos.
-    for nome in ("app.services", "app.db", "app.config"):
+    for nome in ("app.services", "app.db", "app.config",
+                 "app.seguranca", "app.atualizacao", "app.instalacao"):
         if nome in sys.modules:
             del sys.modules[nome]
     config = importlib.import_module("app.config")

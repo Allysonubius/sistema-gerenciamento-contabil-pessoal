@@ -5,7 +5,7 @@ import logging
 import sys
 import traceback
 
-from app import db, inicializacao, instancia
+from app import db, inicializacao, instalacao, instancia
 from app.config import APP_NAME, LOG_PATH, ensure_dirs
 
 
@@ -30,9 +30,39 @@ def _tratar_excecao(tipo, valor, tb) -> None:
         traceback.print_exception(tipo, valor, tb)
 
 
+def _desinstalar() -> int:
+    """Chamado pela lista de aplicativos do Windows, com --desinstalar."""
+    from tkinter import messagebox
+
+    apagar = messagebox.askyesnocancel(
+        APP_NAME,
+        "Remover o programa deste computador?\n\n"
+        "Sim  — remove o programa E apaga os seus dados, sem volta.\n"
+        "Não  — remove só o programa; os seus registros ficam guardados.\n\n"
+        "Em Cancelar, nada acontece.")
+    if apagar is None:
+        return 0
+    resultado = instalacao.desinstalar(apagar_dados=bool(apagar))
+    messagebox.showinfo(
+        APP_NAME,
+        "Programa removido." + ("\n\nOs seus dados também foram apagados."
+                                if resultado["dados_apagados"] else
+                                "\n\nOs seus registros continuam guardados —"
+                                " basta reinstalar para voltar a usá-los."))
+    logging.info("Desinstalado (dados apagados: %s)", resultado["dados_apagados"])
+    return 0
+
+
 def main() -> int:
     _configurar_log()
     sys.excepthook = _tratar_excecao
+
+    if instalacao.ARGUMENTO_DESINSTALAR in sys.argv[1:]:
+        return _desinstalar()
+    if instalacao.ARGUMENTO_INSTALAR in sys.argv[1:]:
+        instalacao.instalar()
+        logging.info("Instalado em modo silencioso")
+        return 0
 
     if instancia.ja_esta_aberto():
         # Já existe uma janela: pede para ela aparecer e encerra esta.
@@ -50,6 +80,13 @@ def main() -> int:
     from app.ui.main_window import Aplicacao
 
     app = Aplicacao(iniciar_minimizado=inicializacao.ARGUMENTO_MINIMIZADO in sys.argv[1:])
+    if not app.liberado:
+        # A senha não conferiu, ou o usuário desistiu de entrar.
+        logging.info("Encerrado sem passar pela senha")
+        app.destroy()
+        db.fechar()
+        instancia.liberar()
+        return 0
     app.report_callback_exception = lambda *args: _tratar_excecao(*args)
     app.mainloop()
     db.fechar()

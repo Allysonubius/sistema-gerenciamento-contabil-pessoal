@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-from app import db, inicializacao, services
+from app import atualizacao, db, inicializacao, instalacao, seguranca, services
 from app.config import APP_VERSION, BACKUP_DIR, DB_PATH, EXPORT_DIR, ensure_dirs
 from app.ui.theme import CORES
 from app.ui.widgets import Cabecalho, Tabela, centralizar
@@ -232,6 +232,170 @@ class Configuracoes(ttk.Frame):
                                        command=self.arquivar_sem_uso)
         self.btn_arquivar.pack(anchor="w")
 
+        # --- senha, instalação e versão -----------------------------------
+        sistema = ttk.Labelframe(corpo, text=" Este computador ")
+        sistema.grid(row=3, column=0, columnspan=2, sticky="nsew", pady=(16, 0))
+
+        ttk.Label(sistema, text="Senha de abertura", style="SecaoSuperficie.TLabel").pack(
+            anchor="w")
+        self.lbl_senha = ttk.Label(sistema, style="DicaSuperficie.TLabel", wraplength=880,
+                                   justify="left")
+        self.lbl_senha.pack(anchor="w", pady=(2, 8))
+        acoes_senha = ttk.Frame(sistema, style="Superficie.TFrame")
+        acoes_senha.pack(fill="x")
+        self.btn_senha = ttk.Button(acoes_senha, text="Trocar a senha",
+                                    command=self.trocar_senha)
+        self.btn_senha.pack(side="left")
+        self.btn_tirar_senha = ttk.Button(acoes_senha, text="Tirar a senha",
+                                          command=self.tirar_senha)
+        self.btn_tirar_senha.pack(side="left", padx=8)
+
+        ttk.Separator(sistema).pack(fill="x", pady=12)
+        ttk.Label(sistema, text="Instalação", style="SecaoSuperficie.TLabel").pack(anchor="w")
+        self.lbl_instalacao = ttk.Label(sistema, style="DicaSuperficie.TLabel",
+                                        wraplength=880, justify="left")
+        self.lbl_instalacao.pack(anchor="w", pady=(2, 8))
+        self.btn_instalar = ttk.Button(sistema, text="Instalar neste computador",
+                                       command=self.instalar)
+        self.btn_instalar.pack(anchor="w")
+
+        ttk.Separator(sistema).pack(fill="x", pady=12)
+        ttk.Label(sistema, text="Versão", style="SecaoSuperficie.TLabel").pack(anchor="w")
+        self.lbl_versao = ttk.Label(sistema, style="DicaSuperficie.TLabel", wraplength=880,
+                                    justify="left")
+        self.lbl_versao.pack(anchor="w", pady=(2, 8))
+        acoes_versao = ttk.Frame(sistema, style="Superficie.TFrame")
+        acoes_versao.pack(fill="x")
+        ttk.Button(acoes_versao, text="Procurar atualizações agora",
+                   command=self.procurar_atualizacao).pack(side="left")
+        self.btn_baixar = ttk.Button(acoes_versao, text="Abrir a página da versão nova",
+                                     command=self.abrir_pagina_versao)
+        self.btn_baixar.pack(side="left", padx=8)
+        self.var_avisar_versao = tk.BooleanVar(value=atualizacao.verificacao_ligada())
+        ttk.Checkbutton(acoes_versao, style="Superficie.TCheckbutton",
+                        variable=self.var_avisar_versao, command=self.alternar_aviso_versao,
+                        text="Conferir sozinho uma vez por dia").pack(side="left", padx=16)
+
+    # ------------------------------------------------------------------ #
+    def _atualizar_sistema(self) -> None:
+        """Senha, instalação e versão: o estado de cada uma, em uma frase."""
+        if seguranca.tem_senha():
+            quando = seguranca.criada_em()[:10]
+            self.lbl_senha.configure(
+                text="O programa pede uma senha para abrir"
+                     + (f" (definida em {services.para_br(quando)})" if quando else "")
+                     + ". Ela vale só neste computador e não embaralha o arquivo dos"
+                       " dados — é uma tranca na porta, não um cofre.",
+                foreground=CORES["sucesso"])
+            self.btn_senha.configure(text="Trocar a senha")
+            self.btn_tirar_senha.state(["!disabled"])
+        else:
+            self.lbl_senha.configure(
+                text="Qualquer pessoa que abra este programa vê os seus números.",
+                foreground=CORES["alerta"])
+            self.btn_senha.configure(text="Criar uma senha")
+            self.btn_tirar_senha.state(["disabled"])
+
+        estado = instalacao.situacao()
+        if not estado["disponivel"]:
+            texto, cor, pode = ("A instalação só existe no programa compilado para"
+                                " Windows.", CORES["texto_suave"], False)
+        elif estado["portatil"]:
+            texto, cor, pode = ("Modo portátil: o programa e os dados andam juntos na"
+                                " mesma pasta, e nada deve ser instalado.",
+                                CORES["texto_suave"], False)
+        elif estado["aqui"]:
+            texto, cor, pode = (f"Instalado em {estado['caminho_instalado']}.",
+                                CORES["sucesso"], False)
+        else:
+            texto, cor, pode = (
+                f"Rodando direto de {estado['caminho_atual']}. Instalar cria o atalho no"
+                " menu Iniciar, põe o programa na lista de aplicativos do Windows e"
+                " dispensa guardar o arquivo baixado. Não precisa de administrador, e os"
+                " seus dados não mudam de lugar.", CORES["alerta"], True)
+        self.lbl_instalacao.configure(text=texto, foreground=cor)
+        self.btn_instalar.state(["!disabled"] if pode else ["disabled"])
+
+        self._mostrar_versao(atualizacao.estado_guardado())
+
+    def _mostrar_versao(self, estado: dict) -> None:
+        quando = estado["consultada_em"][:10]
+        visto = f"  Conferido em {services.para_br(quando)}." if quando else ""
+        if estado.get("falhou"):
+            self.lbl_versao.configure(
+                text=f"Você está na versão {estado['atual']}. Não consegui falar com o"
+                     " GitHub agora — pode ser a internet.", foreground=CORES["alerta"])
+        elif estado["ha_novidade"]:
+            self.lbl_versao.configure(
+                text=f"Saiu a versão {estado['disponivel']} — você está na"
+                     f" {estado['atual']}.{visto}", foreground=CORES["alerta"])
+        else:
+            self.lbl_versao.configure(
+                text=f"Você está na versão mais recente ({estado['atual']}).{visto}",
+                foreground=CORES["sucesso"])
+        self.btn_baixar.state(["!disabled"] if estado["ha_novidade"] else ["disabled"])
+
+    def trocar_senha(self) -> None:
+        from app.ui.senha import DialogoCriarSenha
+
+        dialogo = DialogoCriarSenha(self, trocando=seguranca.tem_senha())
+        self.wait_window(dialogo)
+        if dialogo.liberado:
+            self.recarregar()
+            self.app.notificar("Senha salva.")
+
+    def tirar_senha(self) -> None:
+        from tkinter import simpledialog
+
+        if not messagebox.askyesno(
+                "Tirar a senha",
+                "Sem senha, qualquer pessoa que abra o programa neste computador vê os"
+                " seus números.\n\nTirar mesmo assim?", parent=self):
+            return
+        atual = simpledialog.askstring("Confirmar", "Digite a senha de hoje:",
+                                       show="•", parent=self)
+        if atual is None:
+            return
+        try:
+            seguranca.remover_senha(atual)
+        except ValueError as erro:
+            messagebox.showwarning("Não foi possível", str(erro), parent=self)
+            return
+        self.recarregar()
+        self.app.notificar("Senha removida.")
+
+    def instalar(self) -> None:
+        self.app.instalar_no_computador()
+        self.recarregar()
+
+    def alternar_aviso_versao(self) -> None:
+        atualizacao.definir_verificacao(bool(self.var_avisar_versao.get()))
+        self.app.notificar("Aviso de versão nova "
+                           + ("ligado." if self.var_avisar_versao.get() else "desligado."))
+
+    def procurar_atualizacao(self) -> None:
+        estado = atualizacao.verificar(forcar=True)
+        atualizacao.limpar_ignorada()
+        self._mostrar_versao(estado)
+        if estado.get("falhou"):
+            messagebox.showwarning(
+                "Sem resposta",
+                "Não consegui falar com o GitHub agora. Confira a sua internet e"
+                " tente de novo.", parent=self)
+        elif estado["ha_novidade"]:
+            self.app._anunciar_versao_nova()
+            messagebox.showinfo(
+                "Versão nova",
+                f"Saiu a versão {estado['disponivel']}. Você está na {estado['atual']}.\n\n"
+                "Clique em 'Abrir a página da versão nova' para baixar.", parent=self)
+        else:
+            messagebox.showinfo(
+                "Tudo em dia", f"Você já está na versão mais recente"
+                               f" ({estado['atual']}).", parent=self)
+
+    def abrir_pagina_versao(self) -> None:
+        self.app.abrir_pagina_da_versao()
+
     # ------------------------------------------------------------------ #
     def _atualizar_auditoria(self) -> None:
         """Situação do fechamento e das categorias sem uso."""
@@ -377,6 +541,7 @@ class Configuracoes(ttk.Frame):
                  f"Versão do programa: {APP_VERSION}")
         self._atualizar_nuvem()
         self._atualizar_auditoria()
+        self._atualizar_sistema()
 
     def _atualizar_nuvem(self) -> None:
         """Mostra a situação da cópia externa e sugere pastas encontradas."""
