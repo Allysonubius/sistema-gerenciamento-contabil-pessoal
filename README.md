@@ -71,8 +71,9 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 183 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
-pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência e backup.
+São 400 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
+fechamento de competência, trilha de alterações e comprovantes.
 Cada teste roda num banco temporário próprio — os seus dados nunca são tocados.
 
 ## Privacidade e o que não está aqui
@@ -97,8 +98,8 @@ Este repositório contém **apenas o código**. Ficam de fora, pelo `.gitignore`
 | **Salários e Rendas** | Cada fonte de renda que se repete todo mês, com total já recebido, histórico mês a mês (previsto × recebido) e o que fazer ao trocar de emprego: encerrar a fonte antiga no último mês em que entrou e cadastrar a nova. |
 | **Orçamento** | Teto mensal por categoria, com consumo, ritmo e projeção; e os objetivos de poupança. |
 | **Contas e Categorias** | Contas de dinheiro (banco, carteira, cartão) e categorias de ganho/gasto — 67 já vêm prontas. |
-| **Relatórios** | Mês a mês, Categorias mês a mês, Resumo por conta (balancete), Extrato (razão), Ganhos e gastos (DRE), Meu patrimônio (balanço) e Histórico completo (diário). |
-| **Ajustes** | Preferências, cópias de segurança, restauração, exportação e conferência dos dados. |
+| **Relatórios** | Mês a mês, **Ano a ano**, Categorias mês a mês, Resumo por conta (balancete), Extrato (razão), Ganhos e gastos (DRE), Meu patrimônio (balanço), Histórico completo (diário) e Previsão de saldo. |
+| **Ajustes** | Preferências, cópias de segurança, restauração, exportação, conferência dos dados, **fechamento de competência** e **trilha de alterações**. |
 
 Não há barra de menu no topo: toda a navegação está no menu lateral, e as ações de cada
 tela ficam no cabeçalho dela.
@@ -211,6 +212,11 @@ comprometido. Cancelar remove só as parcelas ainda não vencidas.
 hoje com contas a pagar/receber, contas fixas e parcelas já agendadas — e aponta **em que
 data o saldo fica mais baixo**, avisando se ficaria negativo. Há também o resumo mês a mês.
 
+O horizonte padrão é **até o último compromisso cadastrado**, não um prazo fixo: projetar
+90 dias enquanto há parcelas lançadas para dois anos à frente escondia justamente o que
+não está na cabeça de ninguém. Prazos menores (30, 60, 90 dias, 6 meses) continuam
+disponíveis no seletor.
+
 ## Atraso, multa e juros
 
 Uma conta não paga **não muda de data nem é transferida para o mês seguinte**: continua
@@ -244,6 +250,59 @@ Price**, cria todas as parcelas em Contas a Pagar e mantém uma conta de dívida
 Cada parcela é lançada separando **juros** (despesa financeira) de **amortização** (abate
 da dívida), de modo que o saldo devedor cai sozinho a cada pagamento. "Ver parcelas"
 mostra o plano completo, com quanto ainda falta quitar depois de cada uma.
+
+## Fechamento de competência
+
+Fechar um mês é dizer que ele **já virou relatório**: nada mais entra, sai ou muda de valor
+dentro dele. É o que garante que o balanço e a DRE de um período passado continuem
+reproduzíveis — sem isso, uma correção feita hoje em um gasto do ano passado muda em
+silêncio um resultado já dado por certo.
+
+Em `Ajustes → Fechamento de competência` o mês é escolhido e travado. A regra vale para
+tudo que mexeria naquele mês:
+
+- registrar, corrigir ou apagar um lançamento com data dentro dele;
+- **mover** um lançamento de dentro para fora (ou de fora para dentro);
+- pagar um boleto, desfazer um pagamento, quitar ou reabrir uma dívida naquela data;
+- corrigir ou remover uma compra de cartão daquele ciclo.
+
+Só meses que já terminaram podem ser fechados, um a um, na ordem. **Reabrir** é possível a
+qualquer momento, e o fecho anda um mês para trás por vez. O estado mora em
+`configuracao.fechamento_ate`.
+
+## Trilha de alterações
+
+Toda criação, correção e exclusão de um lançamento grava uma linha em
+`lancamento_historico` com o estado que ele tinha **antes** daquela mudança — data,
+descrição, documento, valor, as partidas em texto e o motivo. Somada à linha atual do
+banco, a trilha reconstrói a história inteira do registro.
+
+A tabela não tem chave estrangeira para `lancamento` **de propósito**: a linha precisa
+sobreviver à exclusão do registro que ela descreve. O carimbo da última mudança fica em
+`lancamento.alterado_em`.
+
+Tudo que apaga um lançamento passa por um único ponto (`_apagar_lancamento`), então os
+caminhos indiretos também deixam rastro: desfazer um pagamento, desfazer uma quitação,
+cancelar uma compra parcelada, refazer uma fatura. `Ajustes → Ver trilha de alterações`
+mostra tudo, com filtro por ação e por texto, e exporta em CSV.
+
+## Comprovantes
+
+Na tela **Entradas e Saídas**, o botão `Comprovantes` anexa nota, boleto ou recibo ao
+registro escolhido — PDF, imagem ou planilha, até 10 MB por arquivo. A coluna
+*Comprovante* mostra quantos arquivos cada registro tem.
+
+Os arquivos são **copiados** para `comprovantes/<ano>/` dentro da pasta de dados; o banco
+guarda somente o cadastro (`lancamento_anexo`), para a cópia diária de segurança não
+crescer com PDFs dentro. Em troca, **a cópia de segurança não inclui os anexos**: ao levar
+os dados para outro lugar, leve essa pasta também.
+
+## Datas aceitas
+
+Um ano digitado errado (2062 em vez de 2026) entrava sem aviso e estragava silenciosamente
+toda a previsão. Agora um lançamento só aceita data entre **1990** e o **fim do décimo ano
+à frente** — margem que cobre qualquer financiamento longo e ainda barra o dedo
+escorregado.
 
 ## Regra de alteração dos registros
 
@@ -335,11 +394,12 @@ sistemacontabil/
 
 ## Modelo de dados
 
-`conta` (plano de contas hierárquico) · `centro_custo` · `lancamento` ·
+`conta` (plano de contas hierárquico) · `centro_custo` (histórico; ver nota abaixo) · `lancamento` ·
 `partida` (débitos e créditos) · `titulo` (a pagar/receber) ·
 `recorrencia` (contas fixas, referenciada por `titulo.recorrencia_id`) · `fatura` ·
 `emprestimo` + `emprestimo_parcela` · `orcamento` · `meta` · `compra_parcelada` ·
-`regra_categoria` · `divida_quitacao` (histórico das dívidas encerradas) · `configuracao`.
+`regra_categoria` · `divida_quitacao` (histórico das dívidas encerradas) ·
+`lancamento_historico` (trilha de alterações) · `lancamento_anexo` (comprovantes) · `configuracao`.
 `conta.eh_carteira` e `conta.instituicao` sustentam a tela Minhas Contas;
 `conta.dia_fechamento` / `dia_vencimento` / `juros_rotativo`, o ciclo do cartão;
 `titulo.multa_pct` / `juros_mes_pct` / `encargos_lancados` / `encargos_ate`, os encargos de
@@ -348,7 +408,16 @@ Chaves estrangeiras ativas, modo WAL e versionamento por `PRAGMA user_version`.
 A coluna `lancamento.origem` distingue o que foi digitado (`MANUAL`) do que nasceu de
 uma baixa de título (`BAIXA`) — é ela que sustenta a regra de alteração acima.
 `titulo.pagamento_automatico` marca as contas em débito automático, baixadas sozinhas no
-vencimento; `lancamento.conferido`, o que já foi conferido (automático por padrão).
+vencimento; `lancamento.conferido`, o que já foi conferido (automático por padrão);
+`lancamento.alterado_em`, o carimbo da última mudança.
+
+### Centro de custo
+
+A coluna `lancamento.centro_custo_id` e a tabela `centro_custo` continuam no banco e na
+exportação, mas **o campo saiu dos formulários**. Eram três opções herdadas da carga
+inicial, sem nenhuma tela para gerenciá-las e sem nenhum relatório que agrupasse por elas:
+na prática, um passo a mais em cada registro que não devolvia informação nenhuma. Numa
+correção, o valor que já estava gravado é preservado.
 
 ## Dívidas: pagar não é o mesmo que corrigir
 

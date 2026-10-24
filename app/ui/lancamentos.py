@@ -1,14 +1,15 @@
 """Entradas e saídas: registro do dia a dia em linguagem simples."""
 from __future__ import annotations
 
+import os
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 from app import db, services
 from app.services import Partida
 from app.ui.theme import CORES, FONTE
 from app.ui.widgets import (AutoConsulta, BarraFiltro, Cabecalho, CampoData, CampoValor,
-                            SeletorCentro, SeletorConta, Tabela, centralizar)
+                            SeletorConta, Tabela, centralizar)
 
 CONTAS_DINHEIRO = ("ATIVO", "PASSIVO")
 
@@ -29,6 +30,7 @@ class Lancamentos(ttk.Frame):
         self.cabecalho.botao("Registrar", self.novo, "Primario.TButton")
         self.cabecalho.botao("Importar extrato", self.importar)
         self.cabecalho.botao("Corrigir", self.editar)
+        self.cabecalho.botao("Comprovantes", self.comprovantes)
         self.cabecalho.botao("Apagar", self.excluir, "Perigo.TButton")
         ttk.Separator(self).pack(fill="x")
 
@@ -93,6 +95,7 @@ class Lancamentos(ttk.Frame):
             ("categoria", "Categoria", 175, "w"),
             ("conta", "Conta usada", 165, "w"),
             ("valor", "Valor", 115, "e"),
+            ("anexos", "Comprovante", 100, "center"),
             ("conferido", "Conferido", 90, "center"),
         ], on_duplo_clique=lambda _i: self.editar(), largura_livre=True, altura=8)
         self.tabela.definir_texto_vazio(
@@ -157,6 +160,7 @@ class Lancamentos(ttk.Frame):
             self.tabela.inserir(
                 (services.para_br(mov["data"]), mov["rotulo"], mov["descricao"],
                  mov["categoria"], mov["conta"], valor,
+                 str(mov["anexos"]) if mov["anexos"] else "—",
                  "sim" if mov["conferido"] else "—"),
                 iid=mov["id"], tags=(tag,) if tag else ())
         self.tabela.finalizar()
@@ -245,6 +249,16 @@ class Lancamentos(ttk.Frame):
             return
         DialogoMovimento(self, int(item), self._apos_salvar)
 
+    def comprovantes(self) -> None:
+        item = self.tabela.selecionado()
+        if not item:
+            messagebox.showinfo(
+                "Comprovantes",
+                "Escolha antes a linha do registro cujo comprovante você quer guardar"
+                " ou consultar.", parent=self)
+            return
+        JanelaComprovantes(self, int(item), self.recarregar)
+
     def excluir(self) -> None:
         item = self.tabela.selecionado()
         if not item:
@@ -280,6 +294,8 @@ class DialogoMovimento(tk.Toplevel):
         super().__init__(master)
         self.transient(master.winfo_toplevel())
         self.lancamento_id = lancamento_id
+        # O grupo saiu do formulário; numa correção o que já estava gravado fica.
+        self.centro_atual: int | None = None
         self.ao_salvar = ao_salvar
         self.partidas: list[dict] = []
         self.title("Registrar entrada ou saída" if lancamento_id is None
@@ -345,11 +361,6 @@ class DialogoMovimento(tk.Toplevel):
         ttk.Entry(comuns, textvariable=self.var_hist, width=42).grid(
             row=1, column=2, sticky="we", padx=(0, 20))
         comuns.columnconfigure(2, weight=1)
-
-        ttk.Label(comuns, text="Grupo (opcional)",
-                  style="CampoSuperficie.TLabel").grid(row=0, column=3, sticky="w")
-        self.sel_centro = SeletorCentro(comuns, width=18)
-        self.sel_centro.grid(row=1, column=3, sticky="w")
 
         self.cp_valor.ao_mudar(self._atualizar_saldos)
         self.notebook.bind("<<NotebookTabChanged>>",
@@ -607,7 +618,7 @@ class DialogoMovimento(tk.Toplevel):
         self.dt_data.set_iso(lanc["data"])
         self.var_hist.set(lanc["historico"])
         self.cp_valor.set_valor(float(lanc["valor"]))
-        self.sel_centro.set_centro_id(lanc["centro_custo_id"])
+        self.centro_atual = lanc["centro_custo_id"]
 
         partidas = db.query(
             "SELECT p.conta_id, p.tipo, p.valor, c.nome, c.codigo, c.tipo AS tipo_conta"
@@ -708,7 +719,7 @@ class DialogoMovimento(tk.Toplevel):
                 self.dt_data.get_iso(),
                 self._descricao_padrao(),
                 partidas,
-                centro_custo_id=self.sel_centro.get_centro_id(),
+                centro_custo_id=self.centro_atual,
             )
         except services.RegraNegocioError as erro:
             messagebox.showwarning("Falta uma informação", str(erro), parent=self)
@@ -727,3 +738,127 @@ class DialogoMovimento(tk.Toplevel):
             self.cp_valor.focus_set()
             return
         self.destroy()
+
+
+# --------------------------------------------------------------------------- #
+class JanelaComprovantes(tk.Toplevel):
+    """Nota, boleto ou recibo guardados junto do registro.
+
+    O arquivo é copiado para a pasta de comprovantes, dentro da pasta de dados.
+    O banco guarda só o cadastro: a cópia diária de segurança copia o .db, e
+    enfiar PDFs lá dentro faria cada cópia crescer sem necessidade.
+    """
+
+    def __init__(self, master, lancamento_id: int, ao_mudar=None):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.title("Comprovantes")
+        self.lancamento_id = lancamento_id
+        self.ao_mudar = ao_mudar
+
+        lanc = db.query_one("SELECT * FROM lancamento WHERE id = ?", (lancamento_id,))
+        resumo = ("" if lanc is None else
+                  f"{services.para_br(lanc['data'])} — {lanc['historico']}"
+                  f" — {services.moeda(float(lanc['valor']))}")
+
+        cabecalho = Cabecalho(self, "Comprovantes", resumo)
+        cabecalho.pack(fill="x")
+        cabecalho.botao("Anexar arquivo", self.anexar, "Primario.TButton")
+        cabecalho.botao("Abrir", self.abrir)
+        cabecalho.botao("Remover", self.remover, "Perigo.TButton")
+        cabecalho.botao("Fechar", self.destroy)
+        ttk.Separator(self).pack(fill="x")
+
+        corpo = ttk.Frame(self, padding=(20, 16))
+        corpo.pack(fill="both", expand=True)
+
+        self.tabela = Tabela(corpo, [
+            ("nome", "Arquivo", 340, "w"),
+            ("tamanho", "Tamanho", 110, "e"),
+            ("quando", "Anexado em", 150, "center"),
+            ("situacao", "Situação", 110, "center"),
+        ], on_duplo_clique=lambda _i: self.abrir(), largura_livre=True, altura=8)
+        self.tabela.definir_texto_vazio(
+            "Nenhum comprovante neste registro. Clique em 'Anexar arquivo'.")
+        self.tabela.pack(fill="both", expand=True)
+
+        ttk.Label(corpo,
+                  text="Aceita PDF, imagem e planilha, até"
+                       f" {services.LIMITE_ANEXO_MB} MB por arquivo. Os arquivos ficam na"
+                       " pasta 'comprovantes', dentro da pasta de dados — a cópia de"
+                       " segurança guarda o banco, não os anexos, então inclua essa pasta"
+                       " quando copiar seus dados para outro lugar.",
+                  style="DicaSuperficie.TLabel", wraplength=700,
+                  justify="left").pack(anchor="w", pady=(12, 0))
+
+        self.recarregar()
+        centralizar(self, 780, 460)
+        self.grab_set()
+
+    # ------------------------------------------------------------------ #
+    def recarregar(self) -> None:
+        self.anexos = services.listar_anexos(self.lancamento_id)
+        self.tabela.limpar()
+        for anexo in self.anexos:
+            self.tabela.inserir(
+                (anexo["nome"], f"{anexo['tamanho'] / 1024:.0f} KB",
+                 anexo["criado_em"].replace("T", " às ")[:16],
+                 "no lugar" if anexo["existe"] else "arquivo sumiu"),
+                iid=str(anexo["id"]),
+                tags=() if anexo["existe"] else ("negativo",))
+        self.tabela.finalizar()
+
+    def anexar(self) -> None:
+        caminhos = filedialog.askopenfilenames(
+            parent=self, title="Escolha o comprovante",
+            filetypes=[("Comprovantes", "*.pdf *.jpg *.jpeg *.png *.webp *.xlsx *.xls *.csv"),
+                       ("Todos os arquivos", "*.*")])
+        if not caminhos:
+            return
+        anexados, erros = 0, []
+        for caminho in caminhos:
+            try:
+                services.anexar_comprovante(self.lancamento_id, caminho)
+                anexados += 1
+            except services.RegraNegocioError as erro:
+                erros.append(str(erro))
+        self.recarregar()
+        if self.ao_mudar:
+            self.ao_mudar()
+        if erros:
+            messagebox.showwarning("Alguns arquivos não entraram",
+                                   "\n\n".join(erros), parent=self)
+        elif anexados:
+            messagebox.showinfo("Pronto", f"{anexados} comprovante(s) anexado(s).",
+                                parent=self)
+
+    def abrir(self) -> None:
+        item = self.tabela.selecionado()
+        if not item:
+            messagebox.showinfo("Abrir", "Escolha antes um arquivo da lista.", parent=self)
+            return
+        try:
+            caminho = services.caminho_do_anexo(int(item))
+        except services.RegraNegocioError as erro:
+            messagebox.showwarning("Não foi possível abrir", str(erro), parent=self)
+            return
+        try:
+            os.startfile(str(caminho))          # abre no programa padrão do Windows
+        except OSError as erro:
+            messagebox.showwarning("Não foi possível abrir", str(erro), parent=self)
+
+    def remover(self) -> None:
+        item = self.tabela.selecionado()
+        if not item:
+            messagebox.showinfo("Remover", "Escolha antes um arquivo da lista.", parent=self)
+            return
+        nome = self.tabela.tree.set(item, "nome")
+        if not messagebox.askyesno(
+                "Remover comprovante",
+                f"Remover '{nome}'?\n\nO arquivo sai da pasta de comprovantes e não dá"
+                " para desfazer.", parent=self):
+            return
+        services.remover_anexo(int(item))
+        self.recarregar()
+        if self.ao_mudar:
+            self.ao_mudar()

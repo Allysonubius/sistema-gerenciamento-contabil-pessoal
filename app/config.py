@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_NAME = "Sistema Contábil Pessoal"
 APP_SLUG = "SistemaContabil"
-APP_VERSION = "1.0.9"
+APP_VERSION = "1.1.0"
 
 
 def _base_dir() -> Path:
@@ -24,6 +24,8 @@ DB_PATH = DATA_DIR / "contabil.db"
 BACKUP_DIR = DATA_DIR / "backups"
 EXPORT_DIR = DATA_DIR / "exportacoes"
 LOG_PATH = DATA_DIR / "app.log"
+# Comprovantes anexados aos lançamentos (nota, boleto, recibo).
+ANEXO_DIR = DATA_DIR / "comprovantes"
 
 
 # Marca gravada pelo script de demonstração na pasta de dados dele. Serve para o
@@ -47,7 +49,7 @@ def modo_demonstracao() -> bool:
 
 
 def ensure_dirs() -> None:
-    for path in (DATA_DIR, BACKUP_DIR, EXPORT_DIR):
+    for path in (DATA_DIR, BACKUP_DIR, EXPORT_DIR, ANEXO_DIR):
         path.mkdir(parents=True, exist_ok=True)
 
 

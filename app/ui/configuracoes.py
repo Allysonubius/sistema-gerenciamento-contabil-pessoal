@@ -10,13 +10,15 @@ from tkinter import filedialog, messagebox, ttk
 from app import db, inicializacao, services
 from app.config import APP_VERSION, BACKUP_DIR, DB_PATH, EXPORT_DIR, ensure_dirs
 from app.ui.theme import CORES
-from app.ui.widgets import Cabecalho, Tabela
+from app.ui.widgets import Cabecalho, Tabela, centralizar
 
 
 class Configuracoes(ttk.Frame):
     def __init__(self, master, app):
         super().__init__(master)
         self.app = app
+        self._meses_fechaveis: list[str] = []
+        self._sem_uso: list[dict] = []
 
         self.cabecalho = Cabecalho(
             self, "Ajustes",
@@ -188,6 +190,167 @@ class Configuracoes(ttk.Frame):
         self.tab_backups.definir_texto_vazio("Nenhuma cópia de segurança ainda.")
         self.tab_backups.pack(fill="both", expand=True)
 
+        # --- fechamento de competência e auditoria ------------------------
+        auditoria = ttk.Labelframe(corpo, text=" Fechamento de competência e auditoria ")
+        auditoria.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(16, 0))
+
+        ttk.Label(auditoria,
+                  text="Fechar um mês é dizer que ele já virou relatório: nada mais entra,"
+                       " sai ou muda de valor dentro dele. É o que garante que o balanço de"
+                       " um mês passado continue o mesmo se você olhar de novo daqui a um ano."
+                       " Reabrir é possível a qualquer momento.",
+                  style="DicaSuperficie.TLabel", wraplength=880,
+                  justify="left").pack(anchor="w", pady=(0, 10))
+
+        linha_fecho = ttk.Frame(auditoria, style="Superficie.TFrame")
+        linha_fecho.pack(fill="x")
+        self.lbl_fecho = ttk.Label(linha_fecho, style="SecaoSuperficie.TLabel")
+        self.lbl_fecho.pack(side="left")
+
+        acoes_fecho = ttk.Frame(auditoria, style="Superficie.TFrame")
+        acoes_fecho.pack(fill="x", pady=(10, 0))
+        ttk.Label(acoes_fecho, text="Fechar até o mês:",
+                  style="CampoSuperficie.TLabel").pack(side="left")
+        self.cb_fecho = ttk.Combobox(acoes_fecho, state="readonly", width=22)
+        self.cb_fecho.pack(side="left", padx=8)
+        self.btn_fechar = ttk.Button(acoes_fecho, text="Fechar competência",
+                                     style="Primario.TButton", command=self.fechar_competencia)
+        self.btn_fechar.pack(side="left")
+        self.btn_reabrir = ttk.Button(acoes_fecho, text="Reabrir o último mês fechado",
+                                      command=self.reabrir_competencia)
+        self.btn_reabrir.pack(side="left", padx=8)
+        ttk.Button(acoes_fecho, text="Ver trilha de alterações",
+                   command=self.abrir_trilha).pack(side="left")
+
+        ttk.Separator(auditoria).pack(fill="x", pady=12)
+        ttk.Label(auditoria, text="Categorias que nunca foram usadas",
+                  style="SecaoSuperficie.TLabel").pack(anchor="w")
+        self.lbl_sem_uso = ttk.Label(auditoria, style="DicaSuperficie.TLabel", wraplength=880,
+                                     justify="left")
+        self.lbl_sem_uso.pack(anchor="w", pady=(2, 8))
+        self.btn_arquivar = ttk.Button(auditoria, text="Arquivar as categorias sem uso",
+                                       command=self.arquivar_sem_uso)
+        self.btn_arquivar.pack(anchor="w")
+
+    # ------------------------------------------------------------------ #
+    def _atualizar_auditoria(self) -> None:
+        """Situação do fechamento e das categorias sem uso."""
+        resumo = services.resumo_fechamento()
+        if resumo["fechado_ate"]:
+            self.lbl_fecho.configure(
+                text=f"Fechado até {resumo['nome_fechado']}"
+                     f" — {resumo['lancamentos_travados']} registro(s) travado(s).",
+                foreground=CORES["sucesso"])
+            self.btn_reabrir.state(["!disabled"])
+        else:
+            self.lbl_fecho.configure(
+                text="Nenhum mês fechado: qualquer registro antigo ainda pode ser alterado.",
+                foreground=CORES["alerta"])
+            self.btn_reabrir.state(["disabled"])
+
+        # Só meses que já terminaram podem ser fechados, um a um, na ordem.
+        opcoes, atual = [], resumo["proximo"]
+        while atual and atual <= resumo["ultimo_fechavel"]:
+            opcoes.append(atual)
+            atual = services._mes_seguinte(atual)
+        self._meses_fechaveis = opcoes
+        self.cb_fecho.configure(values=[services.mes_nome(m).capitalize() for m in opcoes])
+        if opcoes:
+            self.cb_fecho.current(0)
+            self.cb_fecho.state(["!disabled"])
+            self.btn_fechar.state(["!disabled"])
+        else:
+            self.cb_fecho.set("")
+            self.cb_fecho.state(["disabled"])
+            self.btn_fechar.state(["disabled"])
+
+        sem_uso = services.contas_sem_uso()
+        self._sem_uso = sem_uso
+        if sem_uso:
+            exemplos = ", ".join(c["nome"] for c in sem_uso[:4])
+            self.lbl_sem_uso.configure(
+                text=f"{len(sem_uso)} categoria(s) vieram do plano padrão e nunca receberam"
+                     f" nenhum lançamento: {exemplos}"
+                     f"{' e outras' if len(sem_uso) > 4 else ''}."
+                     " Arquivar tira as duas coisas do caminho: a lista comprida nos seletores"
+                     " e o risco de classificar um gasto na categoria errada."
+                     " Nada é apagado — elas voltam em Categorias quando você quiser.",
+                foreground=CORES["alerta"])
+            self.btn_arquivar.state(["!disabled"])
+        else:
+            self.lbl_sem_uso.configure(
+                text="Todas as suas categorias estão em uso. Nada a arrumar aqui.",
+                foreground=CORES["sucesso"])
+            self.btn_arquivar.state(["disabled"])
+
+    def fechar_competencia(self) -> None:
+        indice = self.cb_fecho.current()
+        if indice < 0 or indice >= len(self._meses_fechaveis):
+            return
+        competencia = self._meses_fechaveis[indice]
+        quantos = db.query_one(
+            "SELECT COUNT(*) AS n FROM lancamento WHERE substr(data,1,7) <= ?",
+            (competencia,))["n"]
+        if not messagebox.askyesno(
+                "Fechar competência",
+                f"Fechar tudo até {services.mes_nome(competencia)}?\n\n"
+                f"{quantos} registro(s) passam a não aceitar alteração nem exclusão."
+                " As contas a pagar dos meses seguintes continuam normais.\n\n"
+                "Dá para reabrir depois, aqui mesmo.", parent=self):
+            return
+        try:
+            services.fechar_competencia(competencia)
+        except services.RegraNegocioError as erro:
+            messagebox.showwarning("Não foi possível", str(erro), parent=self)
+            return
+        self.recarregar()
+        self.app.notificar(f"Competência fechada até {services.mes_nome(competencia)}.")
+
+    def reabrir_competencia(self) -> None:
+        fechado = services.competencia_fechada()
+        if not fechado:
+            return
+        anterior = services._mes_anterior(fechado)
+        primeiro = services.primeiro_mes_registrado() or ""
+        destino = "" if (not primeiro or anterior < primeiro) else anterior
+        texto = (f"deixar fechado até {services.mes_nome(destino)}" if destino
+                 else "destravar todo o histórico")
+        if not messagebox.askyesno(
+                "Reabrir competência",
+                f"Reabrir {services.mes_nome(fechado)} e {texto}?\n\n"
+                "Os registros daquele mês voltam a aceitar correção — e um relatório já"
+                " entregue daquele período pode deixar de bater.", parent=self):
+            return
+        try:
+            services.reabrir_competencia(destino)
+        except services.RegraNegocioError as erro:
+            messagebox.showwarning("Não foi possível", str(erro), parent=self)
+            return
+        self.recarregar()
+        self.app.notificar(f"{services.mes_nome(fechado).capitalize()} reaberto.")
+
+    def abrir_trilha(self) -> None:
+        JanelaTrilha(self)
+
+    def arquivar_sem_uso(self) -> None:
+        if not self._sem_uso:
+            return
+        nomes = "\n".join(f"  · {c['codigo']}  {c['nome']}" for c in self._sem_uso[:15])
+        resto = (f"\n  ... e mais {len(self._sem_uso) - 15}"
+                 if len(self._sem_uso) > 15 else "")
+        if not messagebox.askyesno(
+                "Arquivar categorias",
+                f"Arquivar {len(self._sem_uso)} categoria(s) sem nenhum uso?\n\n"
+                f"{nomes}{resto}\n\n"
+                "Elas saem dos seletores mas não são apagadas: para usar qualquer uma de"
+                " novo, basta reativá-la na tela Categorias.", parent=self):
+            return
+        total = services.arquivar_contas_sem_uso()
+        self.recarregar()
+        self.app.atualizar_dependentes()
+        self.app.notificar(f"{total} categoria(s) arquivada(s).")
+        messagebox.showinfo("Pronto", f"{total} categoria(s) arquivada(s).", parent=self)
+
     # ------------------------------------------------------------------ #
     def recarregar(self) -> None:
         ensure_dirs()
@@ -213,6 +376,7 @@ class Configuracoes(ttk.Frame):
                  f"Arquivo de dados ({tamanho:.0f} KB):\n{DB_PATH}\n\n"
                  f"Versão do programa: {APP_VERSION}")
         self._atualizar_nuvem()
+        self._atualizar_auditoria()
 
     def _atualizar_nuvem(self) -> None:
         """Mostra a situação da cópia externa e sugere pastas encontradas."""
@@ -423,3 +587,136 @@ class Configuracoes(ttk.Frame):
                     f"{mov['valor']:.2f}".replace(".", ","), mov["centro_custo"]])
         messagebox.showinfo("Pronto", f"Arquivo salvo em:\n{caminho}\n\n"
                                       "Ele pode ser aberto no Excel.", parent=self)
+
+
+# --------------------------------------------------------------------------- #
+class JanelaTrilha(tk.Toplevel):
+    """Tudo o que foi corrigido ou apagado, com o estado anterior de cada um.
+
+    Cada linha guarda como o registro era ANTES daquela mudança. Somado ao que
+    está hoje em Entradas e Saídas, isso reconstrói a história inteira.
+    """
+
+    FILTROS = {"Tudo": "", "Só o que foi corrigido": "ALTERADO",
+               "Só o que foi apagado": "EXCLUIDO", "Só criações": "CRIADO"}
+
+    def __init__(self, master):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.title("Trilha de alterações")
+        self.configure(padx=0, pady=0)
+
+        cabecalho = Cabecalho(
+            self, "Trilha de alterações",
+            "Cada linha mostra como o registro estava antes da mudança. Nada aqui pode ser"
+            " editado — é justamente o ponto.")
+        cabecalho.pack(fill="x")
+        cabecalho.botao("Salvar em arquivo", self.exportar)
+        cabecalho.botao("Fechar", self.destroy)
+        ttk.Separator(self).pack(fill="x")
+
+        corpo = ttk.Frame(self, padding=(20, 16))
+        corpo.pack(fill="both", expand=True)
+
+        filtros = ttk.Frame(corpo, style="Superficie.TFrame", padding=12)
+        filtros.configure(relief="solid", borderwidth=1)
+        filtros.pack(fill="x")
+        ttk.Label(filtros, text="Mostrar:", style="CampoSuperficie.TLabel").pack(side="left")
+        self.cb_acao = ttk.Combobox(filtros, state="readonly", width=24,
+                                    values=list(self.FILTROS))
+        self.cb_acao.set("Tudo")
+        self.cb_acao.pack(side="left", padx=(8, 20))
+        self.cb_acao.bind("<<ComboboxSelected>>", lambda _e: self.recarregar())
+        ttk.Label(filtros, text="Procurar:", style="CampoSuperficie.TLabel").pack(side="left")
+        self.var_texto = tk.StringVar()
+        entrada = ttk.Entry(filtros, textvariable=self.var_texto, width=30)
+        entrada.pack(side="left", padx=8)
+        entrada.bind("<Return>", lambda _e: self.recarregar())
+        ttk.Button(filtros, text="Procurar", command=self.recarregar).pack(side="left")
+        ttk.Button(filtros, text="Limpar", command=self.limpar).pack(side="left", padx=8)
+        self.lbl_resumo = ttk.Label(filtros, style="DicaSuperficie.TLabel")
+        self.lbl_resumo.pack(side="right")
+
+        self.tabela = Tabela(corpo, [
+            ("quando", "Quando mudou", 150, "center"),
+            ("acao", "O que houve", 100, "center"),
+            ("data", "Data do registro", 110, "center"),
+            ("descricao", "Como estava", 260, "w"),
+            ("valor", "Valor de então", 120, "e"),
+            ("motivo", "Por quê", 190, "w"),
+            ("situacao", "Hoje", 90, "center"),
+        ], largura_livre=True, altura=16)
+        self.tabela.definir_texto_vazio(
+            "Nada foi corrigido nem apagado desde que a trilha passou a existir.")
+        self.tabela.pack(fill="both", expand=True, pady=(12, 0))
+
+        self.lbl_partidas = ttk.Label(corpo, style="DicaSuperficie.TLabel", wraplength=900,
+                                      justify="left")
+        self.lbl_partidas.pack(anchor="w", pady=(10, 0))
+        self.tabela.tree.bind("<<TreeviewSelect>>", lambda _e: self._mostrar_partidas())
+
+        self.recarregar()
+        centralizar(self, 1060, 640)
+        self.grab_set()
+
+    # ------------------------------------------------------------------ #
+    def limpar(self) -> None:
+        self.var_texto.set("")
+        self.cb_acao.set("Tudo")
+        self.recarregar()
+
+    def recarregar(self) -> None:
+        self.linhas = services.listar_alteracoes(
+            texto=self.var_texto.get().strip(),
+            acao=self.FILTROS.get(self.cb_acao.get(), ""))
+        self.tabela.limpar()
+        for linha in self.linhas:
+            quando = linha["quando"].replace("T", " às ")[:16]
+            self.tabela.inserir(
+                (quando, linha["rotulo"], services.para_br(linha["data"]),
+                 linha["historico"], services.moeda(linha["valor"]),
+                 linha["motivo"] or "—",
+                 "existe" if linha["ainda_existe"] else "apagado"),
+                iid=str(linha["id"]),
+                tags=("negativo",) if linha["acao"] == "EXCLUIDO" else ())
+        self.tabela.finalizar()
+
+        resumo = services.resumo_alteracoes()
+        self.lbl_resumo.configure(
+            text=f"{len(self.linhas)} de {resumo['total']} evento(s)   ·   "
+                 f"{resumo['alterados']} correção(ões), {resumo['excluidos']} exclusão(ões)")
+        self.lbl_partidas.configure(
+            text="Escolha uma linha para ver as contas que o registro usava naquele momento.")
+
+    def _mostrar_partidas(self) -> None:
+        item = self.tabela.selecionado()
+        if not item:
+            return
+        escolhida = next((l for l in self.linhas if str(l["id"]) == item), None)
+        if escolhida is None:
+            return
+        documento = f"   ·   documento {escolhida['documento']}" if escolhida["documento"] else ""
+        self.lbl_partidas.configure(
+            text=f"Registro #{escolhida['lancamento_id']}{documento}\n"
+                 f"{escolhida['partidas'] or 'sem partidas registradas'}")
+
+    def exportar(self) -> None:
+        ensure_dirs()
+        caminho = filedialog.asksaveasfilename(
+            parent=self, initialdir=EXPORT_DIR, initialfile="trilha_de_alteracoes.csv",
+            defaultextension=".csv", filetypes=[("Planilha (CSV)", "*.csv")])
+        if not caminho:
+            return
+        with open(caminho, "w", encoding="utf-8-sig", newline="") as arquivo:
+            escritor = csv.writer(arquivo, delimiter=";")
+            escritor.writerow(["Quando mudou", "O que houve", "Registro", "Data do registro",
+                               "Como estava", "Valor de então", "Contas", "Por quê",
+                               "Hoje"])
+            for linha in self.linhas:
+                escritor.writerow([
+                    linha["quando"].replace("T", " "), linha["rotulo"],
+                    linha["lancamento_id"], services.para_br(linha["data"]),
+                    linha["historico"], f"{linha['valor']:.2f}".replace(".", ","),
+                    linha["partidas"], linha["motivo"],
+                    "existe" if linha["ainda_existe"] else "apagado"])
+        messagebox.showinfo("Pronto", f"Arquivo salvo em:\n{caminho}", parent=self)

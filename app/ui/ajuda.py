@@ -176,12 +176,40 @@ TOPICOS: list[tuple[str, str]] = [
      "Um gasto que nasceu do pagamento de um boleto não pode ser apagado na tela de\n"
      "Entradas e Saídas. Volte ao boleto e clique em 'Desfazer pagamento'."),
 
+    ("Guardar o comprovante de um registro",
+     "Na tela 'Entradas e Saídas', escolha a linha e clique em 'Comprovantes'.\n"
+     "Dá para anexar a nota, o boleto ou o recibo — PDF, foto ou planilha.\n\n"
+     "A coluna 'Comprovante' mostra quantos arquivos cada registro tem.\n\n"
+     "Atenção: os arquivos ficam na pasta 'comprovantes', dentro da pasta de dados.\n"
+     "A cópia de segurança guarda o banco de dados, não os anexos — quando copiar\n"
+     "seus dados para outro lugar, inclua essa pasta também."),
+
+    ("Fechar um mês (e por que isso importa)",
+     "Fechar um mês é dizer que ele já virou relatório: nada mais entra, sai ou muda\n"
+     "de valor dentro dele.\n\n"
+     "Serve para o balanço de um mês passado continuar o mesmo se você olhar de novo\n"
+     "daqui a um ano. Sem isso, uma correção feita hoje em um gasto do ano passado\n"
+     "muda em silêncio um resultado que você já tinha dado por certo.\n\n"
+     "Em 'Ajustes', seção 'Fechamento de competência', escolha o mês e clique em\n"
+     "'Fechar competência'. Só meses que já terminaram podem ser fechados, um a um.\n"
+     "Se precisar mexer em algo depois, clique em 'Reabrir o último mês fechado'."),
+
+    ("Trilha de alterações: o que mudou e quando",
+     "Toda correção e toda exclusão de um registro guardam como ele era antes.\n\n"
+     "Em 'Ajustes', clique em 'Ver trilha de alterações'. Cada linha mostra a data da\n"
+     "mudança, o que houve, a descrição e o valor de então, e as contas que o\n"
+     "registro usava naquele momento.\n\n"
+     "É a resposta para 'esse valor mudou depois que eu lancei?'."),
+
     ("Entender os relatórios",
+     "  • Ano a ano         → o retrato de cada ano e se as coisas melhoraram\n"
      "  • Resumo por conta  → quanto entrou e saiu em cada conta no período\n"
      "  • Extrato da conta  → todos os movimentos de uma conta, em ordem de data\n"
      "  • Receitas e Despesas → o que você ganhou, o que gastou e quanto sobrou\n"
      "  • Meu patrimônio    → tudo o que você tem, tudo o que deve e a diferença\n"
-     "  • Histórico completo → a lista de todos os registros, um por um"),
+     "  • Histórico completo → a lista de todos os registros, um por um\n"
+     "  • Previsão de saldo → como fica o seu dinheiro até o último compromisso\n\n"
+     "Todos abrem já com o histórico inteiro, do primeiro registro até hoje."),
 
     ("Deixar o sistema aberto perto do relógio",
      "Ao minimizar ou fechar a janela, o programa continua funcionando no canto da\n"

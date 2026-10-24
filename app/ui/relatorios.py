@@ -17,6 +17,11 @@ RELATORIOS: list[tuple[str, str, str]] = [
      "Quanto entrou e sobrou em cada mês",
      "Um mês por linha, desde o seu primeiro registro. Mostra o que entrou, o que saiu,"
      " quanto sobrou e quanto havia em conta no fim de cada mês."),
+    ("Ano a ano",
+     "Se a sua vida financeira melhorou",
+     "Um ano por linha, do primeiro registro até hoje. Mostra o que entrou, o que saiu,"
+     " o resultado do ano e quanto ficou guardado no fim — é aqui que se vê a direção"
+     " que as coisas estão tomando."),
     ("Categorias mês a mês",
      "O que subiu ao longo do tempo",
      "Cada categoria em uma linha e cada mês em uma coluna, com total, média e a variação"
@@ -48,7 +53,14 @@ RELATORIOS: list[tuple[str, str, str]] = [
 ]
 
 # Estes percorrem todo o histórico (ou o futuro) e não usam o seletor de período.
-RELATORIOS_MENSAIS = (0, 1, 7)
+RELATORIOS_MENSAIS = (0, 1, 2, 8)
+# O único que olha para frente, em vez de para o histórico.
+RELATORIO_PREVISAO = 8
+# O histórico completo é o único que sai em texto, não em planilha.
+INDICE_HISTORICO = 7
+
+# Previsão: horizonte que vai até o vencimento mais distante já cadastrado.
+OPCAO_COMPROMISSO = "Até o último compromisso"
 
 
 class Relatorios(ttk.Frame):
@@ -106,6 +118,7 @@ class Relatorios(ttk.Frame):
         self.area.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
         self.quadros = [
             self._montar_mes_a_mes(),
+            self._montar_ano_a_ano(),
             self._montar_categorias_mensais(),
             self._montar_balancete(),
             self._montar_razao(),
@@ -141,6 +154,82 @@ class Relatorios(ttk.Frame):
         self.lbl_media_mensal = ttk.Label(aba, style="SecaoSuperficie.TLabel")
         self.lbl_media_mensal.pack(anchor="e", pady=(10, 0))
         return aba
+
+    def _montar_ano_a_ano(self) -> ttk.Frame:
+        aba = self._quadro()
+        topo = ttk.Frame(aba, style="Superficie.TFrame")
+        topo.pack(fill="x", pady=(0, 10))
+        self.lbl_ano_a_ano = ttk.Label(topo, style="DicaSuperficie.TLabel")
+        self.lbl_ano_a_ano.pack(side="left")
+
+        self.tab_anual = Tabela(aba, [
+            ("ano", "Ano", 110, "center"),
+            ("entrou", "Entrou", 130, "e"),
+            ("saiu", "Saiu", 130, "e"),
+            ("resultado", "Sobrou no ano", 140, "e"),
+            ("media", "Média por mês", 140, "e"),
+            ("percentual", "% que sobrou", 115, "center"),
+            ("saldo", "Em conta no fim", 150, "e"),
+        ], largura_livre=True, altura=8)
+        self.tab_anual.definir_texto_vazio(
+            "Ainda não há registros. Assim que você lançar o primeiro, os anos aparecem aqui.")
+        self.tab_anual.pack(fill="both", expand=True)
+        self.lbl_direcao = ttk.Label(aba, style="SecaoSuperficie.TLabel", wraplength=900,
+                                     justify="left")
+        self.lbl_direcao.pack(anchor="w", pady=(10, 0))
+        return aba
+
+    def _gerar_ano_a_ano(self, _desde: str, _ate: str) -> None:
+        self.tab_anual.limpar()
+        linhas = services.resumo_anual()
+        for linha in linhas:
+            rotulo = linha["ano"]
+            if linha["parcial"]:
+                rotulo = f"{linha['ano']} (até agora)"
+            elif linha["futuro"]:
+                rotulo = f"{linha['ano']} (já lançado)"
+            sobra = (f"{linha['sobra_pct']:.1f}%".replace(".", ",")
+                     if linha["receita"] else "—")
+            self.tab_anual.inserir(
+                (rotulo, services.moeda(linha["receita"]), services.moeda(linha["despesa"]),
+                 services.moeda(linha["resultado"]),
+                 services.moeda(round(linha["resultado"] / linha["meses"], 2)),
+                 sobra, services.moeda(linha["saldo_contas"])),
+                iid=linha["ano"], tags=() if linha["resultado"] >= 0 else ("negativo",))
+        self.tab_anual.finalizar()
+
+        if not linhas:
+            self.lbl_ano_a_ano.configure(text="")
+            self.lbl_direcao.configure(text="")
+            return
+
+        self.lbl_ano_a_ano.configure(
+            text=f"{len(linhas)} ano(s) desde {linhas[0]['ano']}"
+                 f"   ·   resultado acumulado {services.moeda(linhas[-1]['acumulado'])}")
+        self.lbl_direcao.configure(text=self._texto_direcao(linhas),
+                                   foreground=CORES["sucesso"]
+                                   if linhas[-1]["resultado"] >= 0 else CORES["perigo"])
+
+    @staticmethod
+    def _texto_direcao(linhas: list[dict]) -> str:
+        """Diz em uma frase o que a tabela está mostrando."""
+        atual = linhas[-1]
+        parcial = " (ano em curso)" if atual["parcial"] else ""
+        verbo = "sobrou" if atual["resultado"] >= 0 else "faltou"
+        frase = (f"Em {atual['ano']}{parcial} {verbo}"
+                 f" {services.moeda(abs(atual['resultado']))}"
+                 f" — média de {services.moeda(abs(round(atual['resultado'] / atual['meses'], 2)))}"
+                 " por mês.")
+        if len(linhas) < 2:
+            return frase
+        anterior = linhas[-2]
+        diferenca = round(atual["resultado"] / atual["meses"]
+                          - anterior["resultado"] / anterior["meses"], 2)
+        if abs(diferenca) < 1:
+            return frase + f" Praticamente o mesmo ritmo de {anterior['ano']}."
+        rumo = "melhor" if diferenca > 0 else "pior"
+        return (frase + f" Por mês, {services.moeda(abs(diferenca))} {rumo}"
+                        f" do que em {anterior['ano']}.")
 
     def _montar_categorias_mensais(self) -> ttk.Frame:
         aba = self._quadro()
@@ -265,9 +354,13 @@ class Relatorios(ttk.Frame):
         topo = ttk.Frame(aba, style="Superficie.TFrame")
         topo.pack(fill="x", pady=(0, 10))
         ttk.Label(topo, text="Olhar até:", style="CampoSuperficie.TLabel").pack(side="left")
-        self.cb_previsao = ttk.Combobox(topo, state="readonly", width=14,
-                                        values=["30 dias", "60 dias", "90 dias", "6 meses"])
-        self.cb_previsao.set("90 dias")
+        self.cb_previsao = ttk.Combobox(
+            topo, state="readonly", width=24,
+            values=["30 dias", "60 dias", "90 dias", "6 meses",
+                    OPCAO_COMPROMISSO])
+        # Abre no horizonte inteiro: cortar em 90 dias escondia as parcelas
+        # mais distantes, que são exatamente as que o usuário não tem na cabeça.
+        self.cb_previsao.set(OPCAO_COMPROMISSO)
         self.cb_previsao.pack(side="left", padx=8)
         self.cb_previsao.bind("<<ComboboxSelected>>", lambda _e: self.gerar())
         self.lbl_previsao = ttk.Label(topo, style="SecaoSuperficie.TLabel")
@@ -297,8 +390,12 @@ class Relatorios(ttk.Frame):
         return aba
 
     def _gerar_previsao(self, _desde: str, _ate: str) -> None:
-        dias = {"30 dias": 30, "60 dias": 60, "90 dias": 90, "6 meses": 180}[
-            self.cb_previsao.get()]
+        escolha = self.cb_previsao.get()
+        if escolha == OPCAO_COMPROMISSO:
+            dias, meses = services.dias_de_compromisso(), None
+        else:
+            dias = {"30 dias": 30, "60 dias": 60, "90 dias": 90, "6 meses": 180}[escolha]
+            meses = max(1, dias // 30)
         previsao = services.previsao_saldo(dias)
 
         self.tab_previsao.limpar()
@@ -318,7 +415,7 @@ class Relatorios(ttk.Frame):
         self.tab_previsao.finalizar()
 
         self.tab_previsao_mes.limpar()
-        for item in services.previsao_mensal(6):
+        for item in services.previsao_mensal(meses):
             self.tab_previsao_mes.inserir(
                 (item["nome"].capitalize(), services.moeda(item["pagar"]),
                  services.moeda(item["receber"]), services.moeda(item["saldo_projetado"])),
@@ -370,15 +467,15 @@ class Relatorios(ttk.Frame):
             self.filtro.pack_forget()
             self.lbl_sem_filtro.configure(
                 text="Este relatório olha para frente: usa o que já está agendado."
-                if indice == 7 else
+                if indice == RELATORIO_PREVISAO else
                 "Este relatório mostra todo o seu histórico, do primeiro registro até hoje.")
             self.lbl_sem_filtro.pack(side="left")
         else:
             self.lbl_sem_filtro.pack_forget()
             self.filtro.pack(side="left")
 
-        [self._gerar_mes_a_mes, self._gerar_categorias_mensais, self._gerar_balancete,
-         self._gerar_razao, self._gerar_dre, self._gerar_balanco,
+        [self._gerar_mes_a_mes, self._gerar_ano_a_ano, self._gerar_categorias_mensais,
+         self._gerar_balancete, self._gerar_razao, self._gerar_dre, self._gerar_balanco,
          self._gerar_diario, self._gerar_previsao][indice](desde, ate)
 
     # ------------------------------------------------------------------ #
@@ -568,11 +665,12 @@ class Relatorios(ttk.Frame):
     def exportar(self) -> None:
         ensure_dirs()
         indice = self._indice_atual
-        nomes = ["mes_a_mes", "categorias_mes_a_mes", "resumo_por_conta", "extrato",
-                 "ganhos_e_gastos", "meu_patrimonio", "historico", "previsao_saldo"]
+        nomes = ["mes_a_mes", "ano_a_ano", "categorias_mes_a_mes", "resumo_por_conta",
+                 "extrato", "ganhos_e_gastos", "meu_patrimonio", "historico",
+                 "previsao_saldo"]
         nome = nomes[indice]
 
-        if indice == 6:
+        if indice == INDICE_HISTORICO:
             caminho = filedialog.asksaveasfilename(
                 parent=self, initialdir=EXPORT_DIR, initialfile=f"{nome}.txt",
                 defaultextension=".txt", filetypes=[("Arquivo de texto", "*.txt")])
@@ -581,8 +679,9 @@ class Relatorios(ttk.Frame):
             with open(caminho, "w", encoding="utf-8") as arquivo:
                 arquivo.write(self.txt_diario.get("1.0", "end"))
         else:
-            tabelas = [self.tab_mensal, self.tab_matriz, self.tab_balancete, self.tab_razao,
-                       self.tab_dre, self.tab_balanco, None, self.tab_previsao]
+            tabelas = [self.tab_mensal, self.tab_anual, self.tab_matriz, self.tab_balancete,
+                       self.tab_razao, self.tab_dre, self.tab_balanco, None,
+                       self.tab_previsao]
             tabela = tabelas[indice]
             if tabela is None:
                 messagebox.showinfo("Exportar", "Gere o relatório antes de salvar.", parent=self)

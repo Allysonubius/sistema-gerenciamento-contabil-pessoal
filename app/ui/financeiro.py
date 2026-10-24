@@ -8,7 +8,7 @@ from tkinter import messagebox, ttk
 from app import db, services
 from app.ui.theme import CORES, FONTE
 from app.ui.widgets import (AutoConsulta, Cabecalho, CampoData, CampoValor, Paginacao,
-                            SeletorCentro, SeletorConta, Tabela, centralizar)
+                            SeletorConta, Tabela, centralizar)
 
 ROTULO_STATUS = {"ABERTO": "Em aberto", "QUITADO": "Já pago", "CANCELADO": "Cancelada"}
 
@@ -747,6 +747,8 @@ class DialogoTitulo(tk.Toplevel):
         self.titulo_id = titulo_id
         self.ao_salvar = ao_salvar
         self.recorrencia_id: int | None = None
+        # O grupo saiu do formulário; numa correção o que já estava gravado fica.
+        self.centro_atual: int | None = None
         self.competencia = services.mes_atual()
         self.valor_original = 0.0
         self.title("Cadastrar conta" if titulo_id is None else f"Corrigir conta nº {titulo_id}")
@@ -817,11 +819,6 @@ class DialogoTitulo(tk.Toplevel):
         self.lbl_categoria_dica.grid(row=9, column=0, columnspan=3, sticky="w")
         self.sel_conta = SeletorConta(corpo, tipos=("DESPESA",), width=60)
         self.sel_conta.grid(row=10, column=0, columnspan=3, sticky="w", pady=(3, 9))
-
-        ttk.Label(corpo, text="Grupo (opcional)", style="Campo.TLabel").grid(
-            row=11, column=0, sticky="w")
-        self.sel_centro = SeletorCentro(corpo)
-        self.sel_centro.grid(row=12, column=0, sticky="w", pady=(3, 9))
 
         self.quadro_fixa = ttk.Frame(corpo)
         self.quadro_fixa.grid(row=11, column=1, columnspan=2, rowspan=2, sticky="w")
@@ -1010,7 +1007,7 @@ class DialogoTitulo(tk.Toplevel):
         if t["conta_pagamento_id"]:
             self.sel_pagamento.set_conta_id(t["conta_pagamento_id"])
         self.sel_conta.set_conta_id(t["conta_id"])
-        self.sel_centro.set_centro_id(t["centro_custo_id"])
+        self.centro_atual = t["centro_custo_id"]
         self.txt_obs.insert("1.0", t["observacao"])
         self.var_multa.set(str(t["multa_pct"] or 0))
         self.var_juros.set(str(t["juros_mes_pct"] or 0))
@@ -1039,7 +1036,7 @@ class DialogoTitulo(tk.Toplevel):
                     "Escolha a categoria — é ela que diz onde o valor será lançado no pagamento.")
             descricao = self.var_desc.get().strip() or self.sel_conta.get().split("  (")[0]
             observacao = self.txt_obs.get("1.0", "end").strip()
-            centro_id = self.sel_centro.get_centro_id()
+            centro_id = self.centro_atual
             multa = services.para_float(self.var_multa.get() or "0")
             juros = services.para_float(self.var_juros.get() or "0")
             pagamento_id = self.sel_pagamento.get_conta_id()

@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from app import db
+from app import config, db
 
 TIPOS_CONTA = ("ATIVO", "PASSIVO", "PATRIMONIO", "RECEITA", "DESPESA")
 ROTULO_TIPO = {
@@ -500,10 +500,12 @@ def _refazer_faturas_em_aberto(cartao_id: int) -> int:
             if f["encargos_lancados"]:      # já tem multa/juros contabilizados: não mexe
                 continue
             if float(f["encargos"]) > CENTAVO:
-                conn.execute(
-                    "DELETE FROM lancamento WHERE documento = ? AND origem = 'ENCARGO'"
+                alvos = conn.execute(
+                    "SELECT id FROM lancamento WHERE documento = ? AND origem = 'ENCARGO'"
                     " AND id IN (SELECT lancamento_id FROM partida WHERE conta_id = ?)",
-                    (f"ROT-{f['competencia']}", cartao_id))
+                    (f"ROT-{f['competencia']}", cartao_id)).fetchall()
+                for alvo in alvos:
+                    _apagar_lancamento(conn, alvo["id"], "fatura refeita")
             conn.execute("DELETE FROM fatura WHERE id = ?", (f["id"],))
             if f["titulo_id"]:
                 conn.execute("DELETE FROM titulo WHERE id = ?", (f["titulo_id"],))
@@ -888,9 +890,15 @@ def editar_compra_cartao(lancamento_id: int, categoria_id: int, valor: float, da
         raise RegraNegocioError("Informe o valor da compra.")
     descricao = descricao.strip() or categoria["nome"]
 
+    _validar_data(data_iso)
+    _garantir_periodo_aberto(lanc["data"], "alterado")
+    _garantir_periodo_aberto(data_iso, "movido para esta data")
     with db.transaction() as conn:
-        conn.execute("UPDATE lancamento SET data = ?, historico = ?, valor = ? WHERE id = ?",
-                     (data_iso, descricao, round(valor, 2), lancamento_id))
+        _registrar_historico(conn, lancamento_id, "ALTERADO", "compra do cartão corrigida")
+        conn.execute("UPDATE lancamento SET data = ?, historico = ?, valor = ?,"
+                     " alterado_em = ? WHERE id = ?",
+                     (data_iso, descricao, round(valor, 2),
+                      datetime.now().isoformat(timespec="seconds"), lancamento_id))
         conn.execute("UPDATE partida SET valor = ? WHERE lancamento_id = ?",
                      (round(valor, 2), lancamento_id))
         conn.execute("UPDATE partida SET conta_id = ? WHERE lancamento_id = ? AND tipo = 'D'",
@@ -926,8 +934,10 @@ def editar_compra_parcelada(compra_id: int, descricao: str, categoria_id: int,
                      (descricao, categoria_id, compra_id))
         for lanc in abertas:
             numero = lanc["historico"].rsplit("(", 1)[-1] if lanc["historico"].endswith(")") else ""
-            conn.execute("UPDATE lancamento SET historico = ? WHERE id = ?",
-                         (f"{descricao} ({numero}" if numero else descricao, lanc["id"]))
+            _registrar_historico(conn, lanc["id"], "ALTERADO", "compra parcelada corrigida")
+            conn.execute("UPDATE lancamento SET historico = ?, alterado_em = ? WHERE id = ?",
+                         (f"{descricao} ({numero}" if numero else descricao,
+                          datetime.now().isoformat(timespec="seconds"), lanc["id"]))
             conn.execute("UPDATE partida SET conta_id = ? WHERE lancamento_id = ? AND tipo = 'D'",
                          (categoria_id, lanc["id"]))
 
@@ -951,8 +961,12 @@ def remover_compra_cartao(lancamento_id: int) -> dict:
                    if not _fatura_paga_na_data(compra["cartao_id"], p["data"])]
         if not remover:
             raise RegraNegocioError("Todas as parcelas estão em faturas já pagas.")
+        for parcela in parcelas:
+            if parcela["id"] in remover:
+                _garantir_periodo_aberto(parcela["data"], "apagado")
         with db.transaction() as conn:
-            conn.executemany("DELETE FROM lancamento WHERE id = ?", [(i,) for i in remover])
+            for parcela_id in remover:
+                _apagar_lancamento(conn, parcela_id, "compra parcelada removida")
             if len(remover) == len(parcelas):
                 conn.execute("DELETE FROM compra_parcelada WHERE id = ?", (compra["id"],))
         fechar_faturas()
@@ -964,7 +978,9 @@ def remover_compra_cartao(lancamento_id: int) -> dict:
     if _fatura_paga_na_data(compra["cartao_id"], lanc["data"]):
         raise RegraNegocioError(
             "Esta compra está numa fatura já paga e não pode mais ser removida.")
-    db.execute("DELETE FROM lancamento WHERE id = ?", (lancamento_id,))
+    _garantir_periodo_aberto(lanc["data"], "apagado")
+    with db.transaction() as conn:
+        _apagar_lancamento(conn, lancamento_id, "compra do cartão removida")
     fechar_faturas()
     return {"removidas": 1, "mantidas": 0}
 
@@ -1492,9 +1508,10 @@ def desfazer_quitacao(quitacao_id: int) -> None:
         " AND EXISTS (SELECT 1 FROM partida p WHERE p.lancamento_id = l.id"
         "             AND p.conta_id = ?)",
         (DOCUMENTO_QUITACAO, quitacao["data"], quitacao["conta_id"]))]
+    _garantir_periodo_aberto(quitacao["data"], "desfeito")
     with db.transaction() as conn:
         for lancamento_id in nossos:
-            conn.execute("DELETE FROM lancamento WHERE id = ?", (lancamento_id,))
+            _apagar_lancamento(conn, lancamento_id, "quitação desfeita")
         conn.execute("UPDATE conta SET ativo = 1 WHERE id = ?", (quitacao["conta_id"],))
         conn.execute("DELETE FROM divida_quitacao WHERE id = ?", (quitacao_id,))
 
@@ -1582,8 +1599,7 @@ def excluir_conta_com_lancamentos(conta_id: int) -> None:
 
     with db.transaction() as conn:
         for lanc in lancamentos:
-            conn.execute("DELETE FROM partida WHERE lancamento_id = ?", (lanc["id"],))
-            conn.execute("DELETE FROM lancamento WHERE id = ?", (lanc["id"],))
+            _apagar_lancamento(conn, lanc["id"], "conta excluída com os registros dela")
         conn.execute("DELETE FROM conta WHERE id = ?", (conta_id,))
 
 
@@ -1838,6 +1854,217 @@ def _validar_saldo(partidas: list[Partida], data_iso: str, documento: str,
                 " registre antes o dinheiro que entrou.")
 
 
+# --------------------------------------------------------------------------- #
+# Fechamento de competência
+# --------------------------------------------------------------------------- #
+# Um mês fechado é um mês que já virou relatório: o balanço e a DRE daquele
+# período precisam continuar reproduzíveis amanhã. Enquanto o mês está fechado,
+# nada entra, sai ou muda de valor dentro dele.
+def competencia_fechada() -> str:
+    """Último mês fechado (``AAAA-MM``), ou ``''`` quando nada está fechado."""
+    return db.get_config("fechamento_ate", "")
+
+
+def competencia_valida(texto: str) -> bool:
+    if len(texto) != 7 or texto[4] != "-":
+        return False
+    try:
+        ano, mes = int(texto[:4]), int(texto[5:])
+    except ValueError:
+        return False
+    return 1900 <= ano <= 2999 and 1 <= mes <= 12
+
+
+def fechar_competencia(competencia: str) -> dict:
+    """Trava todos os registros até o fim do mês informado."""
+    competencia = (competencia or "").strip()
+    if not competencia_valida(competencia):
+        raise RegraNegocioError("Informe o mês no formato AAAA-MM.")
+    if competencia >= mes_atual():
+        raise RegraNegocioError(
+            "Este mês ainda não terminou. Só dá para fechar um mês que já passou.")
+    atual = competencia_fechada()
+    if atual and competencia <= atual:
+        raise RegraNegocioError(f"A competência já está fechada até {mes_nome(atual)}.")
+    db.set_config("fechamento_ate", competencia)
+    return resumo_fechamento()
+
+
+def reabrir_competencia(competencia: str = "") -> dict:
+    """Volta o fecho para o mês informado. Sem mês, destrava tudo."""
+    competencia = (competencia or "").strip()
+    if competencia and not competencia_valida(competencia):
+        raise RegraNegocioError("Informe o mês no formato AAAA-MM.")
+    atual = competencia_fechada()
+    if not atual:
+        raise RegraNegocioError("Não há competência fechada para reabrir.")
+    if competencia and competencia >= atual:
+        raise RegraNegocioError(
+            f"Reabrir serve para andar para trás. Hoje está fechado até {mes_nome(atual)}.")
+    db.set_config("fechamento_ate", competencia)
+    return resumo_fechamento()
+
+
+def periodo_fechado(data_iso: str) -> bool:
+    fechado = competencia_fechada()
+    return bool(fechado) and bool(data_iso) and data_iso[:7] <= fechado
+
+
+def resumo_fechamento() -> dict:
+    """O que está travado hoje e o que o próximo fecho alcançaria."""
+    fechado = competencia_fechada()
+    primeiro = primeiro_mes_registrado()
+    ultimo_fechavel = _mes_anterior(mes_atual())
+    proximo = _mes_seguinte(fechado) if fechado else (primeiro or "")
+    if not proximo or proximo > ultimo_fechavel:
+        proximo = ""
+    travados = 0
+    if fechado:
+        row = db.query_one(
+            "SELECT COUNT(*) AS n FROM lancamento WHERE substr(data,1,7) <= ?", (fechado,))
+        travados = int(row["n"]) if row else 0
+    return {
+        "fechado_ate": fechado,
+        "nome_fechado": mes_nome(fechado) if fechado else "",
+        "proximo": proximo,
+        "nome_proximo": mes_nome(proximo) if proximo else "",
+        "lancamentos_travados": travados,
+        "primeiro_mes": primeiro or "",
+        "ultimo_fechavel": ultimo_fechavel,
+    }
+
+
+def _garantir_periodo_aberto(data_iso: str, acao: str) -> None:
+    if not periodo_fechado(data_iso):
+        return
+    raise RegraNegocioError(
+        f"{mes_nome(data_iso[:7]).capitalize()} está fechado: este registro não pode mais"
+        f" ser {acao}.\n\nSe precisar mesmo mexer, vá em Ajustes, seção 'Fechamento de"
+        " competência', e reabra o período."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Datas aceitas em um lançamento
+# --------------------------------------------------------------------------- #
+# Um erro de digitação no ano (2062 em vez de 2026) entrava sem aviso e
+# estragava silenciosamente toda a previsão. Dez anos à frente cobrem qualquer
+# financiamento longo e ainda barram o dedo escorregado.
+DATA_MINIMA = "1990-01-01"
+ANOS_FUTURO_PERMITIDOS = 10
+
+
+def limite_de_data() -> str:
+    return date(date.today().year + ANOS_FUTURO_PERMITIDOS, 12, 31).isoformat()
+
+
+def _validar_data(data_iso: str) -> None:
+    try:
+        date.fromisoformat(data_iso)
+    except (ValueError, TypeError):
+        raise RegraNegocioError("Data inválida. Use o formato dd/mm/aaaa.") from None
+    if data_iso < DATA_MINIMA:
+        raise RegraNegocioError(
+            f"A data {para_br(data_iso)} é anterior a {para_br(DATA_MINIMA)}."
+            " Confira o ano que você digitou.")
+    limite = limite_de_data()
+    if data_iso > limite:
+        raise RegraNegocioError(
+            f"A data {para_br(data_iso)} está longe demais no futuro — o limite é"
+            f" {para_br(limite)}. Confira o ano que você digitou.")
+
+
+# --------------------------------------------------------------------------- #
+# Trilha de alteração
+# --------------------------------------------------------------------------- #
+# Cada mudança guarda o estado que o lançamento tinha ANTES dela. Somado à
+# linha atual do banco, isso reconstrói a história inteira do registro — e
+# responde à pergunta que antes não tinha resposta: "esse valor mudou?".
+def _resumo_partidas(conn, lancamento_id: int) -> str:
+    linhas = conn.execute(
+        "SELECT c.codigo, c.nome, p.tipo, p.valor FROM partida p"
+        " JOIN conta c ON c.id = p.conta_id WHERE p.lancamento_id = ?"
+        " ORDER BY p.tipo DESC, p.id", (lancamento_id,)).fetchall()
+    return " | ".join(
+        f"{l['tipo']} {l['codigo']} {l['nome']} {moeda(l['valor'])}" for l in linhas)
+
+
+def _registrar_historico(conn, lancamento_id: int, acao: str, motivo: str = "") -> None:
+    """Fotografa o lançamento como ele está agora, antes de mudar ou de sair."""
+    lanc = conn.execute("SELECT * FROM lancamento WHERE id = ?", (lancamento_id,)).fetchone()
+    if lanc is None:
+        return
+    conn.execute(
+        "INSERT INTO lancamento_historico (lancamento_id, acao, quando, data, historico,"
+        " documento, valor, partidas, motivo) VALUES (?,?,?,?,?,?,?,?,?)",
+        (lancamento_id, acao, datetime.now().isoformat(timespec="seconds"), lanc["data"],
+         lanc["historico"], lanc["documento"], float(lanc["valor"]),
+         _resumo_partidas(conn, lancamento_id), motivo))
+
+
+def _apagar_lancamento(conn, lancamento_id: int, motivo: str = "") -> None:
+    """Exclui deixando na trilha o que havia ali."""
+    _registrar_historico(conn, lancamento_id, "EXCLUIDO", motivo)
+    conn.execute("DELETE FROM lancamento WHERE id = ?", (lancamento_id,))
+
+
+ACOES_ALTERACAO = {"CRIADO": "Criado", "ALTERADO": "Alterado", "EXCLUIDO": "Apagado"}
+
+
+def listar_alteracoes(desde: str | None = None, ate: str | None = None,
+                      texto: str = "", acao: str = "",
+                      lancamento_id: int | None = None) -> list[dict]:
+    """A trilha, do mais recente para o mais antigo."""
+    filtros, params = ["1=1"], []
+    if desde:
+        filtros.append("h.quando >= ?")
+        params.append(desde)
+    if ate:
+        filtros.append("h.quando <= ?")
+        params.append(ate + "T23:59:59")
+    if texto:
+        filtros.append("(h.historico LIKE ? OR h.partidas LIKE ? OR h.motivo LIKE ?)")
+        params += [f"%{texto}%"] * 3
+    if acao:
+        filtros.append("h.acao = ?")
+        params.append(acao)
+    if lancamento_id:
+        filtros.append("h.lancamento_id = ?")
+        params.append(lancamento_id)
+    linhas = db.query(
+        "SELECT h.*, (SELECT 1 FROM lancamento l WHERE l.id = h.lancamento_id) AS existe"
+        f" FROM lancamento_historico h WHERE {' AND '.join(filtros)}"
+        " ORDER BY h.quando DESC, h.id DESC", tuple(params))
+    return [{
+        "id": l["id"],
+        "lancamento_id": l["lancamento_id"],
+        "acao": l["acao"],
+        "rotulo": ACOES_ALTERACAO.get(l["acao"], l["acao"]),
+        "quando": l["quando"],
+        "data": l["data"],
+        "historico": l["historico"],
+        "documento": l["documento"],
+        "valor": float(l["valor"]),
+        "partidas": l["partidas"],
+        "motivo": l["motivo"],
+        "ainda_existe": bool(l["existe"]),
+    } for l in linhas]
+
+
+def resumo_alteracoes() -> dict:
+    row = db.query_one(
+        "SELECT COUNT(*) AS n,"
+        " SUM(CASE WHEN acao='ALTERADO' THEN 1 ELSE 0 END) AS alterados,"
+        " SUM(CASE WHEN acao='EXCLUIDO' THEN 1 ELSE 0 END) AS excluidos,"
+        " MAX(quando) AS ultima FROM lancamento_historico")
+    return {
+        "total": int(row["n"] or 0),
+        "alterados": int(row["alterados"] or 0),
+        "excluidos": int(row["excluidos"] or 0),
+        "ultima": row["ultima"] or "",
+    }
+
+
 def salvar_lancamento(
     lancamento_id: int | None,
     data_iso: str,
@@ -1851,17 +2078,26 @@ def salvar_lancamento(
     historico = historico.strip()
     if not historico:
         raise RegraNegocioError("Escreva uma descrição para este registro.")
+    _validar_data(data_iso)
     total = validar_partidas(partidas)
     _validar_saldo(partidas, data_iso, documento, lancamento_id)
+    _garantir_periodo_aberto(data_iso, "registrado nesta data")
     if lancamento_id:
         _garantir_edicao_permitida(lancamento_id, "alterado")
+        antigo = db.query_one("SELECT data FROM lancamento WHERE id = ?", (lancamento_id,))
+        if antigo is not None:
+            # Tirar um registro de dentro de um mês fechado é mexer naquele mês.
+            _garantir_periodo_aberto(antigo["data"], "alterado")
 
+    era_edicao = lancamento_id is not None
     with db.transaction() as conn:
         if lancamento_id:
+            _registrar_historico(conn, lancamento_id, "ALTERADO", "corrigido na tela")
             conn.execute(
-                "UPDATE lancamento SET data=?, historico=?, documento=?, centro_custo_id=?, valor=?"
-                " WHERE id=?",
-                (data_iso, historico, documento, centro_custo_id, total, lancamento_id),
+                "UPDATE lancamento SET data=?, historico=?, documento=?, centro_custo_id=?,"
+                " valor=?, alterado_em=? WHERE id=?",
+                (data_iso, historico, documento, centro_custo_id, total,
+                 datetime.now().isoformat(timespec="seconds"), lancamento_id),
             )
             conn.execute("DELETE FROM partida WHERE lancamento_id = ?", (lancamento_id,))
         else:
@@ -1879,6 +2115,8 @@ def salvar_lancamento(
             "INSERT INTO partida (lancamento_id, conta_id, tipo, valor) VALUES (?,?,?,?)",
             [(lancamento_id, p.conta_id, p.tipo, p.valor) for p in partidas],
         )
+        if not era_edicao:
+            _registrar_historico(conn, lancamento_id, "CRIADO", f"origem {origem.lower()}")
     if atualizar_faturas:
         _atualizar_faturas_se_cartao(p.conta_id for p in partidas)
     return lancamento_id
@@ -1923,9 +2161,13 @@ def _garantir_edicao_permitida(lancamento_id: int, acao: str) -> None:
 
 def excluir_lancamento(lancamento_id: int) -> None:
     _garantir_edicao_permitida(lancamento_id, "apagado")
+    lanc = db.query_one("SELECT data FROM lancamento WHERE id = ?", (lancamento_id,))
+    if lanc is not None:
+        _garantir_periodo_aberto(lanc["data"], "apagado")
     contas = [p["conta_id"] for p in db.query(
         "SELECT conta_id FROM partida WHERE lancamento_id = ?", (lancamento_id,))]
-    db.execute("DELETE FROM lancamento WHERE id = ?", (lancamento_id,))
+    with db.transaction() as conn:
+        _apagar_lancamento(conn, lancamento_id, "apagado na tela")
     _atualizar_faturas_se_cartao(contas)
 
 
@@ -1962,6 +2204,7 @@ def listar_lancamentos(
         params.append(limite)
     return db.query(
         "SELECT l.*, cc.nome AS centro_custo,"
+        " (SELECT COUNT(*) FROM lancamento_anexo a WHERE a.lancamento_id = l.id) AS anexos,"
         " (SELECT GROUP_CONCAT(c.codigo || ' ' || c.nome, ' | ') FROM partida p"
         "   JOIN conta c ON c.id = p.conta_id WHERE p.lancamento_id = l.id AND p.tipo='D') AS debitos,"
         " (SELECT GROUP_CONCAT(c.codigo || ' ' || c.nome, ' | ') FROM partida p"
@@ -2049,6 +2292,8 @@ def listar_movimentos(
             "editavel": lanc["origem"] == "MANUAL",
             "origem": lanc["origem"],
             "conferido": bool(lanc["conferido"]),
+            "anexos": int(lanc["anexos"] or 0),
+            "alterado_em": lanc["alterado_em"] or "",
             **info,
         })
     return saida
@@ -3143,7 +3388,7 @@ def estornar_titulo(titulo_id: int) -> dict:
             (titulo_id,),
         )
         if titulo["lancamento_id"]:
-            conn.execute("DELETE FROM lancamento WHERE id = ?", (titulo["lancamento_id"],))
+            _apagar_lancamento(conn, titulo["lancamento_id"], "pagamento desfeito")
         for sobra in sobras:
             conn.execute("DELETE FROM titulo WHERE id = ?", (sobra["id"],))
     # Pagamento feito com cartão, ou de uma fatura: as faturas se reajustam.
@@ -3436,6 +3681,294 @@ def resumo_mensal(meses: list[str]) -> list[dict]:
             "saldo_contas": saldo,
         })
     return linhas
+
+
+def anos_do_historico() -> list[str]:
+    """Todos os anos entre o primeiro registro e o último, sem buracos."""
+    row = db.query_one("SELECT MIN(data) AS a, MAX(data) AS b FROM lancamento")
+    if not row or not row["a"]:
+        return []
+    primeiro, ultimo = int(row["a"][:4]), int(row["b"][:4])
+    ultimo = max(ultimo, date.today().year)
+    return [str(ano) for ano in range(primeiro, ultimo + 1)]
+
+
+def resumo_anual() -> list[dict]:
+    """Entrou, saiu, resultado e dinheiro em conta no fim de cada ano.
+
+    É a visão que faltava: mês a mês mostra o detalhe, mas só o ano mostra se a
+    vida financeira está melhorando ou piorando de um período para o outro.
+    """
+    anos = anos_do_historico()
+    if not anos:
+        return []
+
+    movimento = {ano: {"receita": 0.0, "despesa": 0.0} for ano in anos}
+    for row in db.query(
+            "SELECT substr(l.data,1,4) AS ano, c.tipo,"
+            " SUM(CASE WHEN p.tipo = c.natureza THEN p.valor ELSE -p.valor END) AS total"
+            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+            " JOIN conta c ON c.id = p.conta_id"
+            " WHERE c.tipo IN ('RECEITA','DESPESA') GROUP BY ano, c.tipo"):
+        if row["ano"] in movimento:
+            chave = "receita" if row["tipo"] == "RECEITA" else "despesa"
+            movimento[row["ano"]][chave] = round(float(row["total"] or 0.0), 2)
+
+    variacao = {ano: 0.0 for ano in anos}
+    for row in db.query(
+            "SELECT substr(l.data,1,4) AS ano,"
+            " SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS total"
+            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+            " JOIN conta c ON c.id = p.conta_id"
+            " WHERE c.tipo='ATIVO' AND c.eh_carteira = 1 GROUP BY ano"):
+        if row["ano"] in variacao:
+            variacao[row["ano"]] = round(float(row["total"] or 0.0), 2)
+
+    # Quantos meses cada ano teve de fato: o primeiro começa no mês do primeiro
+    # registro e o ano corrente termina neste mês. Sem isso, a média mensal de
+    # um ano de três meses sairia dividida por doze.
+    primeiro_mes = primeiro_mes_registrado() or ""
+    hoje = date.today()
+    linhas, acumulado, saldo = [], 0.0, 0.0
+    for ano in anos:
+        receita = movimento[ano]["receita"]
+        despesa = movimento[ano]["despesa"]
+        resultado = round(receita - despesa, 2)
+        acumulado = round(acumulado + resultado, 2)
+        saldo = round(saldo + variacao[ano], 2)
+
+        inicio = int(primeiro_mes[5:]) if primeiro_mes[:4] == ano else 1
+        fim = hoje.month if int(ano) == hoje.year else 12
+        meses = max(1, fim - inicio + 1)
+        linhas.append({
+            "ano": ano,
+            "receita": receita,
+            "despesa": despesa,
+            "resultado": resultado,
+            "acumulado": acumulado,
+            "saldo_contas": saldo,
+            "meses": meses,
+            "media_receita": round(receita / meses, 2),
+            "media_despesa": round(despesa / meses, 2),
+            "sobra_pct": round(resultado / receita * 100, 1) if receita > CENTAVO else 0.0,
+            "parcial": int(ano) == hoje.year,
+            "futuro": int(ano) > hoje.year,
+        })
+    return linhas
+
+
+# --------------------------------------------------------------------------- #
+# Até onde a previsão precisa olhar
+# --------------------------------------------------------------------------- #
+# Projetar 90 dias enquanto há parcelas cadastradas até 2027 esconde justamente
+# o que importa: o compromisso inteiro. O horizonte passa a ser o dos próprios
+# títulos em aberto.
+def ultimo_compromisso() -> str | None:
+    """Vencimento mais distante entre as contas ainda em aberto."""
+    row = db.query_one("SELECT MAX(vencimento) AS v FROM titulo WHERE status='ABERTO'")
+    return row["v"] if row and row["v"] else None
+
+
+def meses_de_compromisso(minimo: int = 6, maximo: int = 120) -> int:
+    fim = ultimo_compromisso()
+    if not fim:
+        return minimo
+    return max(minimo, min(meses_entre(mes_atual(), fim[:7]) + 1, maximo))
+
+
+def dias_de_compromisso(minimo: int = 90, maximo: int = 3660) -> int:
+    fim = ultimo_compromisso()
+    if not fim:
+        return minimo
+    dias = (date.fromisoformat(fim) - date.today()).days + 1
+    return max(minimo, min(dias, maximo))
+
+
+def horizonte_da_previsao() -> dict:
+    """O que a previsão alcança hoje, em texto pronto para a tela."""
+    fim = ultimo_compromisso()
+    abertos = db.query_one(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(valor),0) AS total FROM titulo"
+        " WHERE status='ABERTO'")
+    return {
+        "ate": fim or "",
+        "meses": meses_de_compromisso(),
+        "dias": dias_de_compromisso(),
+        "titulos": int(abertos["n"]) if abertos else 0,
+        "total": round(float(abertos["total"]), 2) if abertos else 0.0,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Categorias que nunca foram usadas
+# --------------------------------------------------------------------------- #
+# Onde uma conta pode estar amarrada. Aparecendo em qualquer um destes lugares
+# ela não está sem uso, mesmo sem nenhum lançamento.
+VINCULOS_DE_CONTA = (
+    ("partida", "conta_id"),
+    ("conta", "pai_id"),
+    ("conta", "conta_garantia_id"),
+    ("conta", "conta_pagamento_id"),
+    ("titulo", "conta_id"),
+    ("titulo", "conta_pagamento_id"),
+    ("recorrencia", "conta_id"),
+    ("recorrencia", "conta_pagamento_id"),
+    ("orcamento", "conta_id"),
+    ("meta", "conta_id"),
+    ("emprestimo", "conta_id"),
+    ("compra_parcelada", "cartao_id"),
+    ("compra_parcelada", "categoria_id"),
+    ("divida_quitacao", "conta_id"),
+    ("divida_quitacao", "conta_dinheiro_id"),
+    ("regra_categoria", "conta_id"),
+    ("fatura", "conta_id"),
+)
+
+
+def contas_sem_uso() -> list[dict]:
+    """Categorias analíticas ativas que nunca foram usadas e nada referencia.
+
+    Carteiras e cartões ficam de fora de propósito: uma conta de dinheiro
+    recém-criada ainda não tem movimento e não é sobra do plano padrão.
+    """
+    where = " AND ".join(
+        f"NOT EXISTS (SELECT 1 FROM {tabela} v WHERE v.{coluna} = c.id)"
+        for tabela, coluna in VINCULOS_DE_CONTA)
+    return [{"id": r["id"], "codigo": r["codigo"], "nome": r["nome"],
+             "tipo": r["tipo"], "rotulo": ROTULO_TIPO.get(r["tipo"], r["tipo"])}
+            for r in db.query(
+                "SELECT c.id, c.codigo, c.nome, c.tipo FROM conta c"
+                " WHERE c.aceita_lancamento = 1 AND c.ativo = 1 AND c.eh_carteira = 0"
+                f" AND {where} ORDER BY c.codigo")]
+
+
+def arquivar_contas_sem_uso(ids: list[int] | None = None) -> int:
+    """Tira do caminho as categorias sem uso — sem apagar nada.
+
+    Desativar basta: elas somem dos seletores e de qualquer soma, e voltam a
+    qualquer momento na tela Categorias. Apagar seria irreversível por um
+    ganho que é só de arrumação.
+    """
+    candidatas = {c["id"] for c in contas_sem_uso()}
+    alvos = candidatas if ids is None else candidatas & set(ids)
+    if not alvos:
+        return 0
+    marcadores = ",".join("?" * len(alvos))
+    # db.execute devolve o lastrowid, que num UPDATE não diz nada: o que
+    # interessa aqui é quantas contas saíram do caminho.
+    with db.transaction() as conn:
+        conn.execute(f"UPDATE conta SET ativo = 0 WHERE id IN ({marcadores})",
+                     tuple(alvos))
+    return len(alvos)
+
+
+# --------------------------------------------------------------------------- #
+# Comprovantes
+# --------------------------------------------------------------------------- #
+# O arquivo vai para a pasta de comprovantes e o banco guarda só o cadastro:
+# a cópia diária de segurança copia o .db, e enfiar PDFs lá dentro faria cada
+# cópia crescer sem necessidade.
+LIMITE_ANEXO_MB = 10
+EXTENSOES_ANEXO = (
+    ".pdf", ".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp", ".heic",
+    ".txt", ".xml", ".csv", ".zip", ".ofx",
+    ".doc", ".docx", ".xls", ".xlsx", ".odt", ".ods",
+)
+
+
+def _nome_seguro(nome: str) -> str:
+    """Só o nome do arquivo, sem caminho e sem truques como ".." no meio."""
+    nome = nome.replace("\\", "/").rsplit("/", 1)[-1]
+    limpo = "".join(c if (c.isalnum() or c in " .-_") else "_" for c in nome)
+    while ".." in limpo:
+        limpo = limpo.replace("..", ".")
+    return (limpo.strip(" .") or "comprovante")[:80]
+
+
+def anexar_comprovante(lancamento_id: int, caminho, nome: str = "") -> int:
+    """Guarda uma cópia do comprovante e amarra ao lançamento."""
+    from pathlib import Path
+    import shutil
+
+    origem = Path(caminho)
+    if not origem.is_file():
+        raise RegraNegocioError("Arquivo não encontrado.")
+    if origem.suffix.lower() not in EXTENSOES_ANEXO:
+        raise RegraNegocioError(
+            f"Tipo de arquivo não aceito ({origem.suffix or 'sem extensão'})."
+            " Use PDF, imagem ou planilha.")
+    tamanho = origem.stat().st_size
+    if tamanho > LIMITE_ANEXO_MB * 1024 * 1024:
+        raise RegraNegocioError(
+            f"O arquivo tem {tamanho / 1048576:.1f} MB — o limite é {LIMITE_ANEXO_MB} MB.")
+    lanc = db.query_one("SELECT data FROM lancamento WHERE id = ?", (lancamento_id,))
+    if lanc is None:
+        raise RegraNegocioError("Registro não encontrado.")
+
+    config.ensure_dirs()
+    pasta = config.ANEXO_DIR / lanc["data"][:4]
+    pasta.mkdir(parents=True, exist_ok=True)
+    nome = _nome_seguro(nome or origem.name)
+    # Dois anexos no mesmo segundo colidiam e o segundo apagava o primeiro: o
+    # sufixo garante um arquivo por anexo.
+    carimbo = datetime.now().strftime("%Y%m%d%H%M%S")
+    arquivo = f"{lancamento_id}_{carimbo}_{nome}"
+    sufixo = 1
+    while (pasta / arquivo).exists():
+        arquivo = f"{lancamento_id}_{carimbo}_{sufixo}_{nome}"
+        sufixo += 1
+    shutil.copy2(origem, pasta / arquivo)
+
+    return db.execute(
+        "INSERT INTO lancamento_anexo (lancamento_id, nome, arquivo, tamanho, criado_em)"
+        " VALUES (?,?,?,?,?)",
+        (lancamento_id, nome, f"{lanc['data'][:4]}/{arquivo}", tamanho,
+         datetime.now().isoformat(timespec="seconds")))
+
+
+def listar_anexos(lancamento_id: int) -> list[dict]:
+    return [{"id": r["id"], "nome": r["nome"], "arquivo": r["arquivo"],
+             "tamanho": int(r["tamanho"]), "criado_em": r["criado_em"],
+             "existe": (config.ANEXO_DIR / r["arquivo"]).is_file()}
+            for r in db.query(
+                "SELECT * FROM lancamento_anexo WHERE lancamento_id = ?"
+                " ORDER BY id", (lancamento_id,))]
+
+
+def caminho_do_anexo(anexo_id: int):
+    row = db.query_one("SELECT arquivo FROM lancamento_anexo WHERE id = ?", (anexo_id,))
+    if row is None:
+        raise RegraNegocioError("Comprovante não encontrado.")
+    caminho = config.ANEXO_DIR / row["arquivo"]
+    if not caminho.is_file():
+        raise RegraNegocioError(
+            "O arquivo do comprovante não está mais na pasta de dados.\n\n"
+            "Ele pode ter sido movido ou apagado por fora do programa.")
+    return caminho
+
+
+def remover_anexo(anexo_id: int) -> None:
+    row = db.query_one("SELECT arquivo FROM lancamento_anexo WHERE id = ?", (anexo_id,))
+    if row is None:
+        return
+    caminho = config.ANEXO_DIR / row["arquivo"]
+    try:
+        caminho.unlink()
+    except OSError:
+        pass            # o cadastro sai de qualquer forma
+    db.execute("DELETE FROM lancamento_anexo WHERE id = ?", (anexo_id,))
+
+
+def resumo_anexos() -> dict:
+    row = db.query_one(
+        "SELECT COUNT(*) AS n, COUNT(DISTINCT lancamento_id) AS registros,"
+        " COALESCE(SUM(tamanho),0) AS bytes FROM lancamento_anexo")
+    return {
+        "total": int(row["n"] or 0),
+        "registros": int(row["registros"] or 0),
+        "bytes": int(row["bytes"] or 0),
+        "mb": round(float(row["bytes"] or 0) / 1048576, 1),
+    }
 
 
 def matriz_categorias(meses: list[str], tipo: str = "DESPESA") -> list[dict]:
@@ -3974,9 +4507,11 @@ def excluir_compra_parcelada(compra_id: int) -> int:
     """Remove as parcelas ainda não lançadas (futuras) e, se não sobrar nenhuma, a compra."""
     hoje = hoje_iso()
     with db.transaction() as conn:
-        cursor = conn.execute("DELETE FROM lancamento WHERE compra_id = ? AND data > ?",
-                              (compra_id, hoje))
-        removidas = cursor.rowcount
+        futuras = conn.execute("SELECT id FROM lancamento WHERE compra_id = ? AND data > ?",
+                               (compra_id, hoje)).fetchall()
+        for linha in futuras:
+            _apagar_lancamento(conn, linha["id"], "compra parcelada cancelada")
+        removidas = len(futuras)
         restantes = conn.execute("SELECT COUNT(*) AS c FROM lancamento WHERE compra_id = ?",
                                  (compra_id,)).fetchone()["c"]
         if not restantes:
@@ -4020,8 +4555,11 @@ def ajustar_compra_parcelada(compra_id: int, novo_total: float) -> int:
             valor = (round(restante - acumulado, 2) if indice == len(futuras)
                      else nova_parcela)
             acumulado = round(acumulado + valor, 2)
-            conn.execute("UPDATE lancamento SET valor = ? WHERE id = ?",
-                         (valor, lancamento["id"]))
+            _registrar_historico(conn, lancamento["id"], "ALTERADO",
+                                 "valor da compra parcelada refeito")
+            conn.execute("UPDATE lancamento SET valor = ?, alterado_em = ? WHERE id = ?",
+                         (valor, datetime.now().isoformat(timespec="seconds"),
+                          lancamento["id"]))
             conn.execute("UPDATE partida SET valor = ? WHERE lancamento_id = ?",
                          (valor, lancamento["id"]))
         conn.execute("UPDATE compra_parcelada SET valor_total = ?, valor_parcela = ?"
@@ -4419,8 +4957,13 @@ def previsao_por_conta(ate: str | None = None) -> dict:
     }
 
 
-def previsao_mensal(meses: int = 6) -> list[dict]:
-    """Resumo mês a mês do que já está agendado para o futuro."""
+def previsao_mensal(meses: int | None = None) -> list[dict]:
+    """Resumo mês a mês do que já está agendado para o futuro.
+
+    Sem ``meses``, vai até o último compromisso cadastrado: cortar em seis
+    escondia justamente as parcelas mais distantes.
+    """
+    meses = meses or meses_de_compromisso()
     hoje = date.today()
     saldo = total_disponivel()["tem"]
     saida = []

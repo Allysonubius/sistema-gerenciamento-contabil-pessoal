@@ -14,7 +14,7 @@ from typing import Iterator
 
 from app.config import BACKUP_DIR, DB_PATH, ensure_dirs
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 _lock = threading.RLock()
 _conn: sqlite3.Connection | None = None
@@ -68,7 +68,9 @@ CREATE TABLE IF NOT EXISTS lancamento (
     origem          TEXT    NOT NULL DEFAULT 'MANUAL',
     compra_id       INTEGER REFERENCES compra_parcelada(id) ON DELETE CASCADE,
     conferido       INTEGER NOT NULL DEFAULT 0 CHECK (conferido IN (0,1)),
-    id_extrato      TEXT     -- identificador do item importado, evita duplicar
+    id_extrato      TEXT     -- identificador do item importado, evita duplicar,
+    -- Carimbo da última alteração. NULL = nunca foi mexido depois de criado.
+    alterado_em     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS compra_parcelada (
@@ -205,6 +207,33 @@ CREATE TABLE IF NOT EXISTS divida_quitacao (
     criado_em     TEXT    NOT NULL
 );
 
+-- Trilha de alteração: cada mudança em um lançamento deixa aqui o estado que
+-- ele tinha antes. Não há referência a lancamento(id) de propósito — a linha
+-- precisa sobreviver à exclusão do registro que ela descreve.
+CREATE TABLE IF NOT EXISTS lancamento_historico (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    lancamento_id INTEGER NOT NULL,
+    acao          TEXT    NOT NULL CHECK (acao IN ('CRIADO','ALTERADO','EXCLUIDO')),
+    quando        TEXT    NOT NULL,          -- quando a ação aconteceu
+    data          TEXT    NOT NULL,          -- data do lançamento naquele estado
+    historico     TEXT    NOT NULL,
+    documento     TEXT    NOT NULL DEFAULT '',
+    valor         REAL    NOT NULL,
+    partidas      TEXT    NOT NULL DEFAULT '',   -- resumo legível das partidas
+    motivo        TEXT    NOT NULL DEFAULT ''    -- o que provocou a mudança
+);
+
+-- Comprovantes de um lançamento: o arquivo fica na pasta de anexos e aqui
+-- guardamos só o cadastro, para a cópia do banco não inchar.
+CREATE TABLE IF NOT EXISTS lancamento_anexo (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    lancamento_id INTEGER NOT NULL REFERENCES lancamento(id) ON DELETE CASCADE,
+    nome          TEXT    NOT NULL,          -- nome original escolhido pelo usuário
+    arquivo       TEXT    NOT NULL,          -- nome do arquivo guardado na pasta
+    tamanho       INTEGER NOT NULL DEFAULT 0,
+    criado_em     TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS orcamento (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     conta_id    INTEGER NOT NULL REFERENCES conta(id) ON DELETE CASCADE,
@@ -249,6 +278,13 @@ CREATE INDEX IF NOT EXISTS ix_conta_pai          ON conta(pai_id);
 # Criado só depois da migração: em bancos da v1 a coluna ainda não existe.
 INDICES_V2 = "CREATE INDEX IF NOT EXISTS ix_titulo_recorrencia" \
              " ON titulo(recorrencia_id, competencia);"
+
+INDICES_V14 = (
+    "CREATE INDEX IF NOT EXISTS ix_historico_lancamento"
+    " ON lancamento_historico(lancamento_id);"
+    "CREATE INDEX IF NOT EXISTS ix_historico_quando ON lancamento_historico(quando);"
+    "CREATE INDEX IF NOT EXISTS ix_anexo_lancamento ON lancamento_anexo(lancamento_id);"
+)
 
 INDICES_V5 = (
     "CREATE INDEX IF NOT EXISTS ix_lancamento_compra ON lancamento(compra_id);"
@@ -511,6 +547,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("UPDATE divida_quitacao SET valor_pago = valor"
                      " WHERE valor_pago IS NULL")
 
+    if versao < 14:
+        # v14: carimbo de alteração, trilha de mudanças e comprovantes.
+        existentes = {c["name"] for c in conn.execute("PRAGMA table_info(lancamento)")}
+        if "alterado_em" not in existentes:
+            conn.execute("ALTER TABLE lancamento ADD COLUMN alterado_em TEXT")
+
+    conn.executescript(INDICES_V14)
     conn.executescript(INDICES_V5)
 
     # --- dados ----------------------------------------------------------
