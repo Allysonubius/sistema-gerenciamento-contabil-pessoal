@@ -283,10 +283,11 @@ class Configuracoes(ttk.Frame):
         self.btn_baixar = ttk.Button(acoes_versao, text="Ver o que mudou e atualizar",
                                      command=self.abrir_versao_nova)
         self.btn_baixar.pack(side="left", padx=8)
-        self.var_avisar_versao = tk.BooleanVar(value=atualizacao.verificacao_ligada())
-        ttk.Checkbutton(acoes_versao, style="Superficie.TCheckbutton",
-                        variable=self.var_avisar_versao, command=self.alternar_aviso_versao,
-                        text="Conferir sozinho uma vez por dia").pack(side="left", padx=16)
+        ttk.Label(acoes_versao,
+                  text="O programa confere sozinho uma vez por dia. Atualizar não é"
+                       " opcional: a versão nova precisa ser instalada para continuar.",
+                  style="DicaSuperficie.TLabel", wraplength=520,
+                  justify="left").pack(side="left", padx=16)
 
     # ------------------------------------------------------------------ #
     def _atualizar_sistema(self) -> None:
@@ -394,14 +395,8 @@ class Configuracoes(ttk.Frame):
         self.app.notificar(recado)
         self.recarregar()
 
-    def alternar_aviso_versao(self) -> None:
-        atualizacao.definir_verificacao(bool(self.var_avisar_versao.get()))
-        self.app.notificar("Aviso de versão nova "
-                           + ("ligado." if self.var_avisar_versao.get() else "desligado."))
-
     def procurar_atualizacao(self) -> None:
         estado = atualizacao.verificar(forcar=True)
-        atualizacao.limpar_ignorada()
         self._mostrar_versao(estado)
         if estado.get("falhou"):
             messagebox.showwarning(

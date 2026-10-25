@@ -218,13 +218,11 @@ def test_ajustes_anuncia_versao_nova(ajustes, sistema, monkeypatch):
     assert "99.0.0" in ajustes.lbl_versao.cget("text")
 
 
-def test_desligar_o_aviso_de_versao_pela_tela(ajustes, sistema):
-    from app import atualizacao
-
-    ajustes.var_avisar_versao.set(False)
-    ajustes.alternar_aviso_versao()
-
-    assert atualizacao.verificacao_ligada() is False
+def test_nao_ha_como_desligar_o_aviso_de_versao(ajustes, sistema):
+    """Atualizar deixou de ser opcional: desligar a conferência seria a recusa
+    entrando por outra porta."""
+    assert not hasattr(ajustes, "var_avisar_versao")
+    assert "não é opcional" in ajustes.lbl_versao.master.winfo_children()[-1].winfo_children()[-1].cget("text")
 
 
 # --------------------------------------------------------------------------- #

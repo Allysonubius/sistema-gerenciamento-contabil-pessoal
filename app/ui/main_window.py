@@ -66,6 +66,8 @@ class Aplicacao(tk.Tk):
         # pedindo empilha diálogos e deixa o usuário digitando no lugar errado.
         self._pedindo_senha = False
         self._janela_senha = None
+        # Versão já anunciada nesta sessão: não abre a mesma janela duas vezes.
+        self._versao_anunciada = ""
         self.liberado = True
         if not iniciar_minimizado:
             self.liberado = self._abrir_a_porta()
@@ -226,11 +228,10 @@ class Aplicacao(tk.Tk):
     def _montar_layout(self) -> None:
         # Faixas do alto: nascem escondidas e só ocupam espaço quando há o que
         # dizer. A do fechamento vem por cima, porque fala dos seus números.
+        # Sem "dispensar" nem "não avisar": atualizar deixou de ser opcional.
         self.faixa_novidade = FaixaAviso(self, CORES["alerta"])
         self.faixa_novidade.acoes([
-            ("Dispensar", self.faixa_novidade.esconder),
-            ("Não avisar desta versão", self._ignorar_versao),
-            ("Ver o que mudou", self.abrir_versao_nova),
+            ("Atualizar agora", self.abrir_versao_nova),
         ])
 
         self.corpo = ttk.Frame(self)
@@ -402,6 +403,7 @@ class Aplicacao(tk.Tk):
                 logging.exception("Falha nas rotinas da virada do dia")
             self._reacertar_periodos()
             self.conferir_fechamento()
+            self._vigiar_versao_nova()
             self.recarregar_tela_atual()
         self.after(INTERVALO_VIRADA_DIA_MS, self._vigiar_virada_do_dia)
 
@@ -443,7 +445,13 @@ class Aplicacao(tk.Tk):
         threading.Thread(target=consultar, daemon=True, name="versao").start()
 
     def _anunciar_versao_nova(self) -> None:
-        """Mostra a faixa no topo e avisa também pelo ícone do relógio."""
+        """Abre a janela da versão nova, deixa a faixa atrás e avisa na bandeja.
+
+        Janela, e não só a tarja no alto: ficar numa versão velha sem saber é
+        justamente o que o aviso existe para evitar, e tarja é fácil demais de
+        não ver. Uma vez por versão em cada sessão — reabrir a mesma janela a
+        cada volta da bandeja seria estorvo, não aviso.
+        """
         if self._encerrando:
             return
         from app import atualizacao
@@ -455,14 +463,10 @@ class Aplicacao(tk.Tk):
             f"Saiu a versão {estado['disponivel']} — você está na {estado['atual']}.",
             acima_de=self.corpo)
         self.bandeja.notificar(
-            f"A versão {estado['disponivel']} está disponível para baixar.")
-
-    def _ignorar_versao(self) -> None:
-        from app import atualizacao
-
-        atualizacao.ignorar(atualizacao.estado_guardado()["disponivel"])
-        self.faixa_novidade.esconder()
-        self.notificar("Tudo bem — aviso de novo quando sair outra versão.")
+            f"A versão {estado['disponivel']} precisa ser instalada para continuar.")
+        if self._versao_anunciada != estado["disponivel"]:
+            self._versao_anunciada = estado["disponivel"]
+            self.after(700, self.abrir_versao_nova)
 
     # ------------------------------------------------------------------ #
     def conferir_fechamento(self) -> None:
@@ -527,7 +531,28 @@ class Aplicacao(tk.Tk):
         from app.ui.versao import JanelaNovaVersao
 
         self.faixa_novidade.esconder()
-        JanelaNovaVersao(self, self._trocar_para_a_copia_instalada)
+        janela = JanelaNovaVersao(self, self._trocar_para_a_copia_instalada,
+                                  ao_desistir=self.encerrar_sem_perguntar)
+        self.wait_window(janela)
+        # Fechou sem atualizar e sem motivo que libere: a faixa volta, porque o
+        # aviso não é um recado que se dá uma vez e pronto.
+        if not self._encerrando:
+            self._anunciar_versao_nova()
+
+    def encerrar_sem_perguntar(self) -> None:
+        """Sai do programa sem a pergunta de sempre — já foi confirmado antes."""
+        if self._encerrando:
+            return
+        self._encerrando = True
+        try:
+            if db.get_config("backup_ao_sair") == "1":
+                db.backup_automatico()
+        except Exception:  # pragma: no cover
+            pass
+        self.bandeja.parar()
+        db.fechar()
+        instancia.liberar()
+        self.destroy()
 
     # ------------------------------------------------------------------ #
     def _cuidar_da_instalacao(self) -> None:

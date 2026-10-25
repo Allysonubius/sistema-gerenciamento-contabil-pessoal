@@ -224,14 +224,15 @@ def test_a_janela_avisa_quando_nao_da_para_atualizar_daqui(sistema, versao_nova,
             filho.destroy()
 
 
-def test_ignorar_pela_janela(sistema, versao_nova, raiz_tk):
+def test_nao_ha_mais_como_ignorar_uma_versao(sistema, versao_nova, raiz_tk):
+    """Atualizar deixou de ser opcional: ignorar saiu da janela e do painel."""
     modulo = importlib.reload(importlib.import_module("app.ui.versao"))
     janela = modulo.JanelaNovaVersao(raiz_tk)
     janela.grab_release()
     try:
-        janela.ignorar()
-        assert atualizacao.deve_avisar() is False
+        assert not hasattr(janela, "ignorar")
     finally:
+        janela.destroy()
         for filho in raiz_tk.winfo_children():
             filho.destroy()
 
@@ -372,3 +373,170 @@ def test_a_falha_fica_no_registro(sistema, monkeypatch, caplog):
         atualizacao.verificar(forcar=True)
 
     assert any("Consulta de versão falhou" in r.message for r in caplog.records)
+
+
+# --------------------------------------------------------------------------- #
+# O aviso precisa chegar, e voltar a chegar
+# --------------------------------------------------------------------------- #
+def test_o_aviso_abre_a_janela_uma_vez_por_versao(sistema, versao_nova, raiz_tk,
+                                                  monkeypatch):
+    """Tarja é fácil demais de não ver; janela repetida é estorvo."""
+    from app.ui import main_window
+
+    aberturas = []
+
+    class JanelaFalsa:
+        _anunciar_versao_nova = main_window.Aplicacao._anunciar_versao_nova
+        _encerrando = False
+        _versao_anunciada = ""
+        corpo = None
+        mostrados: list = []
+
+        class _Faixa:
+            def mostrar(self, texto, acima_de=None):
+                JanelaFalsa.mostrados.append(texto)
+
+        class _Bandeja:
+            def notificar(self, texto):
+                pass
+
+        faixa_novidade = _Faixa()
+        bandeja = _Bandeja()
+
+        def after(self, _ms, funcao):
+            aberturas.append(funcao)
+
+        def abrir_versao_nova(self):
+            pass
+
+    janela = JanelaFalsa()
+    janela._anunciar_versao_nova()
+    assert len(aberturas) == 1, "a janela tem de abrir no primeiro aviso"
+
+    janela._anunciar_versao_nova()
+    assert len(aberturas) == 1, "a mesma versão não abre a janela de novo"
+    assert len(JanelaFalsa.mostrados) == 2, "a faixa continua aparecendo"
+
+
+def test_versao_ignorada_nao_abre_nada(sistema, versao_nova, raiz_tk):
+    from app.ui import main_window
+
+    atualizacao.ignorar("99.0.0")
+    chamadas = []
+
+    class JanelaFalsa:
+        _anunciar_versao_nova = main_window.Aplicacao._anunciar_versao_nova
+        _encerrando = False
+        _versao_anunciada = ""
+
+        def after(self, _ms, funcao):
+            chamadas.append(funcao)
+
+    JanelaFalsa()._anunciar_versao_nova()
+
+    assert chamadas == []
+
+
+def test_a_consulta_se_repete_quando_o_dia_vira(sistema):
+    """O programa passa dias na bandeja: consultar só na abertura é consultar
+    uma vez na vida."""
+    import inspect
+
+    from app.ui import main_window
+
+    fonte = inspect.getsource(main_window.Aplicacao._vigiar_virada_do_dia)
+    assert "_vigiar_versao_nova" in fonte
+
+
+# --------------------------------------------------------------------------- #
+# Atualizar não é opcional
+# --------------------------------------------------------------------------- #
+def test_a_janela_nao_oferece_recusar(sistema, versao_nova, raiz_tk, monkeypatch):
+    """Não há 'agora não' nem 'não avisar': só atualizar ou fechar o programa."""
+    modulo = importlib.reload(importlib.import_module("app.ui.versao"))
+    monkeypatch.setattr(modulo.instalacao, "disponivel", lambda: True)
+    janela = modulo.JanelaNovaVersao(raiz_tk)
+    janela.grab_release()
+    try:
+        textos = {b.cget("text") for b in janela.btn_baixar.master.winfo_children()}
+        assert "Baixar e atualizar" in textos
+        assert "Fechar o programa" in textos
+        assert "Agora não" not in textos
+        assert "Não avisar desta versão" not in textos
+        assert janela.liberado is False
+    finally:
+        janela.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_fechar_sem_atualizar_encerra_o_programa(sistema, versao_nova, raiz_tk,
+                                                 monkeypatch):
+    modulo = importlib.reload(importlib.import_module("app.ui.versao"))
+    monkeypatch.setattr(modulo.instalacao, "disponivel", lambda: True)
+    monkeypatch.setattr(modulo.messagebox, "askyesno", lambda *a, **k: True)
+    encerrou = []
+    janela = modulo.JanelaNovaVersao(raiz_tk, ao_desistir=lambda: encerrou.append(True))
+    janela.grab_release()
+    try:
+        janela.desistir()
+        assert encerrou == [True]
+    finally:
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_sem_arquivo_para_baixar_nao_tranca_ninguem(sistema, monkeypatch, raiz_tk):
+    """Obrigatoriedade que impede abrir a própria vida financeira é armadilha."""
+    monkeypatch.setattr(atualizacao, "consultar", lambda *a, **k: {
+        "versao": "99.0.0", "nome": "", "notas": "", "pagina": "p",
+        "arquivo": "", "tamanho": 0, "publicada_em": ""})
+    atualizacao.verificar(forcar=True)
+
+    modulo = importlib.reload(importlib.import_module("app.ui.versao"))
+    janela = modulo.JanelaNovaVersao(raiz_tk)
+    janela.grab_release()
+    try:
+        assert janela.liberado is True
+        textos = {b.cget("text") for b in janela.btn_baixar.master.winfo_children()}
+        assert "Continuar assim mesmo" in textos
+    finally:
+        janela.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_download_que_falha_libera_a_saida(sistema, versao_nova, raiz_tk, monkeypatch):
+    """Rede fora do ar não pode impedir alguém de abrir as próprias contas."""
+    modulo = importlib.reload(importlib.import_module("app.ui.versao"))
+    monkeypatch.setattr(modulo.instalacao, "disponivel", lambda: True)
+    janela = modulo.JanelaNovaVersao(raiz_tk)
+    janela.grab_release()
+    try:
+        assert janela.liberado is False
+        janela._falhou("Não consegui baixar a versão nova: sem rede.")
+
+        assert janela.liberado is True
+        textos = {b.cget("text") for b in janela.btn_baixar.master.winfo_children()}
+        assert "Continuar assim mesmo" in textos
+    finally:
+        janela.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_sem_novidade_a_janela_nasce_liberada(sistema, monkeypatch, raiz_tk):
+    monkeypatch.setattr(atualizacao, "consultar", lambda *a, **k: {
+        "versao": atualizacao.APP_VERSION, "nome": "", "notas": "x", "pagina": "p",
+        "arquivo": "", "tamanho": 0, "publicada_em": ""})
+    atualizacao.verificar(forcar=True)
+
+    modulo = importlib.reload(importlib.import_module("app.ui.versao"))
+    janela = modulo.JanelaNovaVersao(raiz_tk)
+    janela.grab_release()
+    try:
+        assert janela.liberado is True
+    finally:
+        janela.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()

@@ -216,7 +216,12 @@ TOPICOS: list[tuple[str, str]] = [
      "contando o que a vers\u00e3o nova traz. O bot\u00e3o 'Baixar e atualizar' faz o resto \u2014\n"
      "o programa busca o arquivo, mostra o andamento, se instala por cima e reabre.\n"
      "Os seus dados ficam onde estavam.\n\n"
-     "Ele n\u00e3o se atualiza sozinho, de prop\u00f3sito: quem clica \u00e9 sempre voc\u00ea.\n\n"
+     "Atualizar n\u00e3o \u00e9 opcional: da janela s\u00f3 se sai instalando a vers\u00e3o nova ou\n"
+     "fechando o programa. Ficar numa vers\u00e3o velha deixaria o sistema para tr\u00e1s das\n"
+     "corre\u00e7\u00f5es que vieram depois.\n\n"
+     "A \u00fanica sa\u00edda \u00e9 quando atualizar se mostra imposs\u00edvel \u2014 sem internet, por\n"
+     "exemplo: a\u00ed aparece 'Continuar assim mesmo', porque nada justifica trancar\n"
+     "voc\u00ea fora das suas pr\u00f3prias contas.\n\n"
      "Em 'Ajustes' d\u00e1 para procurar na hora ou desligar a confer\u00eancia. Sem internet,\n"
      "nada disso aparece e nada trava."),
 

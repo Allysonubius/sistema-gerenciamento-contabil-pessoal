@@ -20,14 +20,20 @@ from app.ui.widgets import Cabecalho, centralizar
 class JanelaNovaVersao(tk.Toplevel):
     """O que mudou, e o botão que traz a versão nova para cá."""
 
-    def __init__(self, master, ao_trocar=None):
+    def __init__(self, master, ao_trocar=None, ao_desistir=None):
         super().__init__(master)
         self.transient(master.winfo_toplevel())
         self.title("Versão nova")
         self.ao_trocar = ao_trocar
+        self.ao_desistir = ao_desistir
         self.estado = atualizacao.estado_guardado()
         self.baixando = False
         self.baixado: Path | None = None
+        # Enquanto houver versão a instalar, daqui só se sai atualizando. Vira
+        # True quando não há o que instalar, quando a instalação acontece, ou
+        # quando atualizar se mostra impossível — obrigatoriedade que impede a
+        # pessoa de abrir a própria vida financeira é armadilha, não regra.
+        self.liberado = not self.estado["ha_novidade"]
 
         novidade = self.estado["ha_novidade"]
         cabecalho = Cabecalho(
@@ -35,7 +41,7 @@ class JanelaNovaVersao(tk.Toplevel):
             (f"Você está na {self.estado['atual']}." if novidade
              else "É a versão que você está usando.") + self._quando())
         cabecalho.pack(fill="x")
-        cabecalho.botao("Fechar", self.fechar)
+        cabecalho.botao("Fechar", self.desistir)
         ttk.Separator(self).pack(fill="x")
 
         corpo = ttk.Frame(self, padding=(20, 16))
@@ -69,18 +75,23 @@ class JanelaNovaVersao(tk.Toplevel):
         self.btn_baixar = ttk.Button(acoes, text="Baixar e atualizar",
                                      style="Primario.TButton", command=self.baixar)
         if novidade:
+            # Atualizar deixou de ser opcional: daqui só se sai instalando, ou
+            # fechando o programa.
             self.btn_baixar.pack(side="left")
-            ttk.Button(acoes, text="Agora não",
-                       command=self.fechar).pack(side="left", padx=8)
-            ttk.Button(acoes, text="Não avisar desta versão",
-                       command=self.ignorar).pack(side="right")
+            ttk.Button(acoes, text="Fechar o programa",
+                       command=self.desistir).pack(side="right")
+            self.protocol("WM_DELETE_WINDOW", self.desistir)
         else:
             ttk.Button(acoes, text="Fechar", style="Primario.TButton",
                        command=self.fechar).pack(side="left")
 
         self._explicar()
         centralizar(self, 680, 620)
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(500, lambda: self.winfo_exists() and self.attributes("-topmost", False))
         self.grab_set()
+        self.focus_force()
 
     # ------------------------------------------------------------------ #
     def _quando(self) -> str:
@@ -99,16 +110,10 @@ class JanelaNovaVersao(tk.Toplevel):
                 foreground=CORES["sucesso"])
             return
         if not self.estado["arquivo"]:
-            self.lbl_situacao.configure(
-                text="Esta versão não trouxe um arquivo para baixar.",
-                foreground=CORES["alerta"])
-            self.btn_baixar.state(["disabled"])
+            self._liberar("Esta versão não trouxe um arquivo para baixar.")
             return
         if not instalacao.disponivel():
-            self.lbl_situacao.configure(
-                text="Rodando pelo código-fonte: para atualizar, use o git.",
-                foreground=CORES["texto_suave"])
-            self.btn_baixar.state(["disabled"])
+            self._liberar("Rodando pelo código-fonte: para atualizar, use o git.")
             return
         peso = (f" ({self.estado['tamanho'] / 1048576:.1f} MB)"
                 if self.estado["tamanho"] else "")
@@ -152,13 +157,38 @@ class JanelaNovaVersao(tk.Toplevel):
         else:
             self.lbl_situacao.configure(text=f"Baixando... {vindos / 1048576:.1f} MB")
 
+    def _liberar(self, motivo: str) -> None:
+        """Atualizar daqui é impossível: a saída se abre, e fica explicada.
+
+        A atualização é obrigatória, mas obrigatoriedade que impede a pessoa de
+        abrir a própria vida financeira por causa de um arquivo que não existe
+        ou de uma rede fora do ar não é regra — é armadilha.
+        """
+        self.liberado = True
+        self.lbl_situacao.configure(text=motivo, foreground=CORES["alerta"])
+        self.btn_baixar.state(["disabled"])
+        self._oferecer_saida()
+
+    def _oferecer_saida(self) -> None:
+        pai = self.btn_baixar.master
+        if any(isinstance(f, ttk.Button) and f.cget("text") == "Continuar assim mesmo"
+               for f in pai.winfo_children()):
+            return
+        ttk.Button(pai, text="Continuar assim mesmo",
+                   command=self.fechar).pack(side="left", padx=8)
+
     def _falhou(self, motivo: str) -> None:
         if not self.winfo_exists():
             return
         self.baixando = False
         self.barra_progresso.pack_forget()
         self.btn_baixar.state(["!disabled"])
-        self.lbl_situacao.configure(text=motivo, foreground=CORES["perigo"])
+        self.lbl_situacao.configure(
+            text=f"{motivo}  Tente de novo; insistindo em falhar, dá para seguir nesta"
+                 " versão por enquanto.", foreground=CORES["perigo"])
+        # Rede fora do ar não pode trancar ninguém fora das próprias contas.
+        self.liberado = True
+        self._oferecer_saida()
 
     def _terminou(self, caminho: Path) -> None:
         if not self.winfo_exists():
@@ -176,6 +206,7 @@ class JanelaNovaVersao(tk.Toplevel):
             return
         # Atualizar é trocar o arquivo no lugar que já era dele: a pasta e os
         # atalhos ficam como estão, sem perguntar de novo o que já foi dito.
+        self.liberado = True
         if not messagebox.askyesno(
                 "Pronto",
                 f"Versão {self.estado['disponivel']} instalada.\n\n"
@@ -189,13 +220,22 @@ class JanelaNovaVersao(tk.Toplevel):
         if self.ao_trocar:
             self.ao_trocar(destino)
 
-    def ignorar(self) -> None:
-        atualizacao.ignorar(self.estado["disponivel"])
-        self.fechar()
-
-    def fechar(self) -> None:
+    def desistir(self) -> None:
+        """Sair daqui sem atualizar custa fechar o programa."""
         if self.baixando and not messagebox.askyesno(
-                "Fechar", "O download está em andamento. Fechar mesmo assim?",
+                "Cancelar", "O download está em andamento. Cancelar mesmo assim?",
                 parent=self):
             return
+        if not self.liberado and not messagebox.askyesno(
+                "Fechar o programa",
+                f"A versão {self.estado['disponivel']} precisa ser instalada para"
+                " continuar usando o sistema.\n\nFechar o programa agora?",
+                parent=self):
+            return
+        desistiu = not self.liberado
+        self.destroy()
+        if desistiu and self.ao_desistir:
+            self.ao_desistir()
+
+    def fechar(self) -> None:
         self.destroy()

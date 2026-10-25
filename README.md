@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 622 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 630 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -342,9 +342,24 @@ Uma vez por dia, numa linha separada para não segurar a abertura, o programa pe
 API pública de releases do GitHub se saiu versão nova. Sem token, sem cadastro, sem
 telemetria: a única coisa que sai daqui é a pergunta "qual é a última versão".
 
-Havendo novidade, aparece uma faixa no topo da janela e um aviso perto do relógio, com
-três saídas: *Ver o que mudou*, *Dispensar* e *Não avisar desta versão*. Em Ajustes dá
-para procurar na hora ou desligar a conferência.
+Havendo novidade, **uma janela se abre** contando o que mudou — tarja no alto da tela
+é fácil demais de não ver, e ficar numa versão velha sem saber é justamente o que o
+aviso existe para evitar. A faixa fica atrás dela, e o ícone perto do relógio avisa
+também.
+
+A conferência se repete a cada abertura **e a cada virada de dia**: o programa passa
+dias na bandeja, e conferir só na abertura seria conferir uma vez na vida.
+
+### Atualizar não é opcional
+
+Não há *agora não*, *dispensar* nem *não avisar desta versão*: da janela só se sai
+instalando a versão nova ou fechando o programa. A conferência diária também deixou de
+ter interruptor — desligá-la seria a recusa entrando por outra porta.
+
+Com uma exceção deliberada: quando atualizar é **impossível** — a release sem arquivo,
+o download falhando, o programa rodando pelo código-fonte — aparece *Continuar assim
+mesmo*. Obrigatoriedade que impede alguém de abrir a própria vida financeira por causa
+de uma rede fora do ar não é regra, é armadilha.
 
 ### Tudo acontece aqui dentro
 
