@@ -22,6 +22,7 @@ class JanelaFalsa:
         self.rotinas = 0
         self.agendado = None
         self._telas = {}
+        self.conferiu_fechamento = 0
 
     # --- partes reais, emprestadas da Aplicação ----------------------- #
     _vigiar_virada_do_dia = main_window.Aplicacao._vigiar_virada_do_dia
@@ -33,6 +34,9 @@ class JanelaFalsa:
 
     def _rotinas_de_abertura(self):
         self.rotinas += 1
+
+    def conferir_fechamento(self):
+        self.conferiu_fechamento += 1
 
     def after(self, _ms, funcao):
         self.agendado = funcao
@@ -55,6 +59,7 @@ def test_dia_virou_refaz_as_contas_da_tela():
 
     assert janela.recarregou == 1
     assert janela.rotinas == 1               # contas fixas, faturas, automáticos
+    assert janela.conferiu_fechamento == 1   # e o mês anterior pode ter fechado
     assert janela._dia_em_tela == date.today()
 
 

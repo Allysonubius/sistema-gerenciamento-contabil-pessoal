@@ -71,10 +71,10 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 527 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 554 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
-fechamento de competência, trilha de alterações, comprovantes, fluxo de caixa, poupança, a virada
-do mês, a senha de abertura, a instalação e o aviso de versão.
+fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
+caixa, poupança, a virada do mês, a senha de abertura, a instalação e o aviso de versão.
 Cada teste roda num banco temporário próprio — os seus dados nunca são tocados.
 
 ## Privacidade e o que não está aqui
@@ -382,6 +382,30 @@ tudo que mexeria naquele mês:
 Só meses que já terminaram podem ser fechados, um a um, na ordem. **Reabrir** é possível a
 qualquer momento, e o fecho anda um mês para trás por vez. O estado mora em
 `configuracao.fechamento_ate`.
+
+### O programa é quem lembra
+
+O fechamento só vale se acontecer, e deixar para quando lembrar é o mesmo que não ter.
+Por isso, havendo mês encerrado e ainda aberto, uma **faixa no alto da janela** diz qual
+é e quantos registros continuam alteráveis. Ela traz três saídas: *Fechar agora*, que leva
+direto a Ajustes; *Depois*, que cala o aviso por sete dias; e *Não avisar mais*, que
+desliga de vez — com interruptor para religar em Ajustes.
+
+O aviso volta sozinho a cada abertura e a cada virada de dia, até o mês ser fechado.
+
+### Categorias que nunca foram usadas
+
+O plano de contas vem pronto, e boa parte dele nunca será usada. Categoria demais no
+seletor atrapalha e convida a classificar errado.
+
+*Ajustes → Ver as categorias* abre a lista com a **prova de que cada uma está vazia**:
+lançamentos, contas a pagar, contas fixas, tetos, metas, compras parceladas,
+subcategorias e regras de importação, tudo contado um a um. Dá para arquivar as
+escolhidas ou todas.
+
+Arquivar **desativa, não apaga**: elas somem dos seletores e voltam a qualquer momento
+na tela Categorias. Arquivar é uma decisão pequena, mas é uma decisão — a pessoa vê o
+que há dentro antes de dizer sim, em vez de confiar na palavra do programa.
 
 ## Trilha de alterações
 

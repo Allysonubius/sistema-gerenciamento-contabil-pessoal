@@ -225,3 +225,70 @@ def test_o_registro_de_titulo_nao_pede_mais_o_grupo(sistema, contas, raiz_tk, li
         assert not hasattr(dialogo, "sel_centro")
     finally:
         dialogo.destroy()
+
+
+# --------------------------------------------------------------------------- #
+# Ver as categorias antes de arquivar
+# --------------------------------------------------------------------------- #
+def test_a_janela_das_categorias_lista_as_candidatas(ajustes):
+    tela, modulo = ajustes
+    janela = modulo.JanelaCategoriasSemUso(tela)
+    janela.grab_release()
+    try:
+        assert janela.candidatas
+        assert len(janela.tabela.tree.get_children()) == len(janela.candidatas)
+    finally:
+        janela.destroy()
+
+
+def test_a_janela_mostra_a_prova_de_que_a_categoria_esta_vazia(ajustes):
+    """É isso que autoriza arquivar sem pensar duas vezes."""
+    tela, modulo = ajustes
+    janela = modulo.JanelaCategoriasSemUso(tela)
+    janela.grab_release()
+    try:
+        primeira = janela.tabela.tree.get_children()[0]
+        assert janela.tabela.tree.set(primeira, "lancamentos") == "0"
+        assert janela.tabela.tree.set(primeira, "ligacoes") == "nada"
+        assert janela.tabela.tree.set(primeira, "grupo")
+    finally:
+        janela.destroy()
+
+
+def test_a_janela_arquiva_so_as_escolhidas(ajustes, sistema, monkeypatch):
+    tela, modulo = ajustes
+    monkeypatch.setattr(modulo.messagebox, "askyesno", lambda *a, **k: True)
+    monkeypatch.setattr(modulo.messagebox, "showinfo", lambda *a, **k: None)
+    janela = modulo.JanelaCategoriasSemUso(tela)
+    janela.grab_release()
+    try:
+        antes = len(janela.candidatas)
+        escolhida = janela.tabela.tree.get_children()[0]
+        janela.tabela.tree.selection_set(escolhida)
+        janela.arquivar_escolhidas()
+
+        assert len(janela.candidatas) == antes - 1
+        assert sistema.obter_conta(int(escolhida))["ativo"] == 0
+    finally:
+        janela.destroy()
+
+
+def test_a_janela_avisa_quando_nada_foi_escolhido(ajustes, monkeypatch):
+    tela, modulo = ajustes
+    avisos = []
+    monkeypatch.setattr(modulo.messagebox, "showinfo",
+                        lambda *a, **k: avisos.append(a))
+    janela = modulo.JanelaCategoriasSemUso(tela)
+    janela.grab_release()
+    try:
+        janela.tabela.tree.selection_remove(*janela.tabela.tree.selection())
+        janela.arquivar_escolhidas()
+        assert avisos
+    finally:
+        janela.destroy()
+
+
+def test_ajustes_tem_o_botao_de_ver_antes_de_arquivar(ajustes):
+    tela, _modulo = ajustes
+    assert tela.btn_ver_sem_uso.cget("text") == "Ver as categorias"
+    assert "disabled" not in tela.btn_ver_sem_uso.state()

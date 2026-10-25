@@ -530,6 +530,57 @@ class Cabecalho(ttk.Frame):
         return botao
 
 
+class FaixaAviso(tk.Frame):
+    """Tarja no alto da janela, com o recado e as saídas dele.
+
+    Nasce escondida e só ocupa espaço quando há o que dizer: um aviso que fica
+    sempre na tela vira moldura e deixa de ser lido.
+    """
+
+    def __init__(self, master, cor: str = "", cor_texto: str = "#1f2937"):
+        cor = cor or CORES["alerta"]
+        super().__init__(master, bg=cor)
+        self._cor = cor
+        self.lbl = tk.Label(self, text="", bg=cor, fg=cor_texto,
+                            font=(FONTE, 10, "bold"), anchor="w", padx=12, pady=8)
+        self.lbl.pack(side="left")
+        self._botoes: list[tk.Button] = []
+        self._acima_de = None
+        self._visivel = False
+
+    def acoes(self, itens: list[tuple[str, Callable[[], None]]]) -> None:
+        """Define os botões da direita, do mais à direita para o mais à esquerda."""
+        for botao in self._botoes:
+            botao.destroy()
+        self._botoes = []
+        for texto, acao in itens:
+            botao = tk.Button(self, text=texto, command=acao, bg=self._cor,
+                              fg=self.lbl.cget("fg"), relief="flat", cursor="hand2",
+                              font=(FONTE, 9), activebackground=self._cor,
+                              borderwidth=0, padx=8)
+            botao.pack(side="right", padx=4)
+            self._botoes.append(botao)
+
+    def mostrar(self, texto: str, acima_de=None) -> None:
+        self.lbl.configure(text=texto)
+        self._acima_de = acima_de or self._acima_de
+        if not self._visivel:
+            if self._acima_de is not None:
+                self.pack(fill="x", before=self._acima_de, side="top")
+            else:
+                self.pack(fill="x", side="top")
+            self._visivel = True
+
+    def esconder(self) -> None:
+        if self._visivel:
+            self.pack_forget()
+            self._visivel = False
+
+    @property
+    def visivel(self) -> bool:
+        return self._visivel
+
+
 class Cartao(tk.Canvas):
     """Indicador do painel: caixa arredondada com título, número grande e nota."""
 
@@ -676,13 +727,13 @@ class Tabela(ttk.Frame):
 
     def __init__(self, master, colunas: Iterable[tuple[str, str, int, str]],
                  on_duplo_clique: Callable[[str], None] | None = None, altura: int = 14,
-                 largura_livre: bool = False):
+                 largura_livre: bool = False, selecao_multipla: bool = False):
         super().__init__(master, style="Superficie.TFrame", padding=1)
         self.configure(relief="solid", borderwidth=1)
         self.colunas = list(colunas)
         ids = [c[0] for c in self.colunas]
         self.tree = ttk.Treeview(self, columns=ids, show="headings", height=altura,
-                                 selectmode="browse")
+                                 selectmode="extended" if selecao_multipla else "browse")
         for cid, titulo, largura, alinhamento in self.colunas:
             self.tree.heading(cid, text=titulo, command=lambda c=cid: self.ordenar(c))
             self.tree.column(cid, width=largura, anchor=alinhamento,

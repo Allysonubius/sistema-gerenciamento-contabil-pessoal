@@ -248,7 +248,21 @@ TOPICOS: list[tuple[str, str]] = [
      "muda em silêncio um resultado que você já tinha dado por certo.\n\n"
      "Em 'Ajustes', seção 'Fechamento de competência', escolha o mês e clique em\n"
      "'Fechar competência'. Só meses que já terminaram podem ser fechados, um a um.\n"
-     "Se precisar mexer em algo depois, clique em 'Reabrir o último mês fechado'."),
+     "Se precisar mexer em algo depois, clique em 'Reabrir o último mês fechado'.\n\n"
+     "Você não precisa lembrar sozinho: havendo mês encerrado e ainda aberto, uma\n"
+     "faixa aparece no alto da janela dizendo qual é. Dá para fechar na hora, adiar\n"
+     "por uma semana ou desligar o aviso."),
+
+    ("Arrumar as categorias que você não usa",
+     "O sistema vem com um plano de contas pronto, e boa parte dele você nunca vai\n"
+     "usar. Categoria demais no seletor atrapalha e convida a classificar errado.\n\n"
+     "Em 'Ajustes', clique em 'Ver as categorias'. A lista mostra, para cada uma,\n"
+     "quantos lançamentos tem, de qual grupo faz parte e o que está amarrado nela:\n"
+     "contas a pagar, tetos, metas, subcategorias. Tudo em zero é a prova de que dá\n"
+     "para arquivar sem medo.\n\n"
+     "Escolha as que quiser (segure Ctrl ou Shift para marcar várias) ou mande\n"
+     "arquivar todas. Nada é apagado: elas somem dos seletores e voltam quando você\n"
+     "quiser, na tela Categorias."),
 
     ("Trilha de alterações: o que mudou e quando",
      "Toda correção e toda exclusão de um registro guardam como ele era antes.\n\n"

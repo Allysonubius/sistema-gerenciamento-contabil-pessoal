@@ -22,7 +22,7 @@ from app.ui.plano_contas import PlanoContas
 from app.ui.relatorios import Relatorios
 from app.ui.salarios import Salarios
 from app.ui.theme import CORES
-from app.ui.widgets import AreaRolavel
+from app.ui.widgets import AreaRolavel, FaixaAviso
 
 INICIO = "Início"
 MOVIMENTOS = "Entradas e Saídas"
@@ -93,6 +93,7 @@ class Aplicacao(tk.Tk):
         self.mostrar(INICIO)
         self._cuidar_da_instalacao()
         self._vigiar_versao_nova()
+        self.conferir_fechamento()
         self._vigiar_segunda_abertura()
         self._vigiar_backup()
         self._dia_em_tela = date.today()
@@ -218,20 +219,20 @@ class Aplicacao(tk.Tk):
             pass
 
     def _montar_layout(self) -> None:
-        # Faixa do aviso de versão nova: construída escondida, aparece acima de
-        # tudo quando há novidade e some assim que o usuário resolve.
-        self.faixa_novidade = tk.Frame(self, bg=CORES["alerta"])
-        self.lbl_novidade = tk.Label(self.faixa_novidade, text="", bg=CORES["alerta"],
-                                     fg="#1f2937", font=(theme.FONTE, 10, "bold"),
-                                     anchor="w", padx=10, pady=8)
-        self.lbl_novidade.pack(side="left")
-        for texto, acao in (("Dispensar", self._esconder_faixa),
-                            ("Não avisar desta versão", self._ignorar_versao),
-                            ("Ver o que mudou", self.abrir_pagina_da_versao)):
-            tk.Button(self.faixa_novidade, text=texto, command=acao,
-                      bg=CORES["alerta"], fg="#1f2937", relief="flat",
-                      font=(theme.FONTE, 9), cursor="hand2",
-                      activebackground=CORES["alerta"]).pack(side="right", padx=6)
+        # Faixas do alto: nascem escondidas e só ocupam espaço quando há o que
+        # dizer. A do fechamento vem por cima, porque fala dos seus números.
+        self.faixa_fechamento = FaixaAviso(self, CORES["primaria"], "#ffffff")
+        self.faixa_fechamento.acoes([
+            ("Depois", self._adiar_fechamento),
+            ("Não avisar mais", self._desligar_lembrete_fechamento),
+            ("Fechar agora", self.abrir_fechamento),
+        ])
+        self.faixa_novidade = FaixaAviso(self, CORES["alerta"])
+        self.faixa_novidade.acoes([
+            ("Dispensar", self.faixa_novidade.esconder),
+            ("Não avisar desta versão", self._ignorar_versao),
+            ("Ver o que mudou", self.abrir_pagina_da_versao),
+        ])
 
         self.corpo = ttk.Frame(self)
         self.corpo.pack(fill="both", expand=True)
@@ -381,6 +382,7 @@ class Aplicacao(tk.Tk):
                 import logging
                 logging.exception("Falha nas rotinas da virada do dia")
             self._reacertar_periodos()
+            self.conferir_fechamento()
             self.recarregar_tela_atual()
         self.after(INTERVALO_VIRADA_DIA_MS, self._vigiar_virada_do_dia)
 
@@ -430,22 +432,57 @@ class Aplicacao(tk.Tk):
         estado = atualizacao.estado_guardado()
         if not estado["ha_novidade"] or estado["ignorada"]:
             return
-        self.lbl_novidade.configure(
-            text=f"  Saiu a versão {estado['disponivel']} — você está na"
-                 f" {estado['atual']}.")
-        self.faixa_novidade.pack(fill="x", before=self.corpo, side="top")
+        self.faixa_novidade.mostrar(
+            f"Saiu a versão {estado['disponivel']} — você está na {estado['atual']}.",
+            acima_de=self.corpo)
         self.bandeja.notificar(
             f"A versão {estado['disponivel']} está disponível para baixar.")
-
-    def _esconder_faixa(self) -> None:
-        self.faixa_novidade.pack_forget()
 
     def _ignorar_versao(self) -> None:
         from app import atualizacao
 
         atualizacao.ignorar(atualizacao.estado_guardado()["disponivel"])
-        self._esconder_faixa()
+        self.faixa_novidade.esconder()
         self.notificar("Tudo bem — aviso de novo quando sair outra versão.")
+
+    # ------------------------------------------------------------------ #
+    def conferir_fechamento(self) -> None:
+        """Lembra, no mês seguinte, que o anterior ficou por fechar.
+
+        O fechamento só vale se acontecer. Deixar para quando lembrar é o mesmo
+        que não ter, então quem lembra é o programa — e volta a lembrar, até o
+        mês ser fechado ou o usuário dizer que não quer mais.
+        """
+        from app import services
+
+        if self._encerrando or not services.deve_lembrar_fechamento():
+            self.faixa_fechamento.esconder()
+            return
+        lembrete = services.lembrete_de_fechamento()
+        resto = (f" e outros {lembrete['quantos'] - 1} mês(es)"
+                 if lembrete["quantos"] > 1 else "")
+        self.faixa_fechamento.mostrar(
+            f"{lembrete['nome'].capitalize()}{resto} já terminou e continua aberto:"
+            f" {lembrete['lancamentos']} registro(s) ainda podem ser alterados.",
+            acima_de=self.corpo)
+
+    def abrir_fechamento(self) -> None:
+        self.faixa_fechamento.esconder()
+        self.mostrar(AJUSTES)
+
+    def _adiar_fechamento(self) -> None:
+        from app import services
+
+        volta = services.adiar_lembrete()
+        self.faixa_fechamento.esconder()
+        self.notificar(f"Tudo bem — volto a lembrar em {services.para_br(volta)}.")
+
+    def _desligar_lembrete_fechamento(self) -> None:
+        from app import services
+
+        services.definir_lembrete(False)
+        self.faixa_fechamento.esconder()
+        self.notificar("Não aviso mais sobre fechamento. Dá para religar em Ajustes.")
 
     def abrir_pagina_da_versao(self) -> None:
         import webbrowser

@@ -221,6 +221,11 @@ class Configuracoes(ttk.Frame):
         self.btn_reabrir.pack(side="left", padx=8)
         ttk.Button(acoes_fecho, text="Ver trilha de alterações",
                    command=self.abrir_trilha).pack(side="left")
+        self.var_lembrar_fecho = tk.BooleanVar(value=services.lembrete_ligado())
+        ttk.Checkbutton(acoes_fecho, style="Superficie.TCheckbutton",
+                        variable=self.var_lembrar_fecho,
+                        command=self.alternar_lembrete,
+                        text="Lembrar no mês seguinte").pack(side="left", padx=16)
 
         ttk.Separator(auditoria).pack(fill="x", pady=12)
         ttk.Label(auditoria, text="Categorias que nunca foram usadas",
@@ -228,9 +233,16 @@ class Configuracoes(ttk.Frame):
         self.lbl_sem_uso = ttk.Label(auditoria, style="DicaSuperficie.TLabel", wraplength=880,
                                      justify="left")
         self.lbl_sem_uso.pack(anchor="w", pady=(2, 8))
-        self.btn_arquivar = ttk.Button(auditoria, text="Arquivar as categorias sem uso",
+        acoes_sem_uso = ttk.Frame(auditoria, style="Superficie.TFrame")
+        acoes_sem_uso.pack(fill="x")
+        self.btn_ver_sem_uso = ttk.Button(acoes_sem_uso, text="Ver as categorias",
+                                          style="Primario.TButton",
+                                          command=self.ver_sem_uso)
+        self.btn_ver_sem_uso.pack(side="left")
+        self.btn_arquivar = ttk.Button(acoes_sem_uso,
+                                       text="Arquivar todas de uma vez",
                                        command=self.arquivar_sem_uso)
-        self.btn_arquivar.pack(anchor="w")
+        self.btn_arquivar.pack(side="left", padx=8)
 
         # --- senha, instalação e versão -----------------------------------
         sistema = ttk.Labelframe(corpo, text=" Este computador ")
@@ -428,6 +440,8 @@ class Configuracoes(ttk.Frame):
             self.cb_fecho.state(["disabled"])
             self.btn_fechar.state(["disabled"])
 
+        self.var_lembrar_fecho.set(services.lembrete_ligado())
+
         sem_uso = services.contas_sem_uso()
         self._sem_uso = sem_uso
         if sem_uso:
@@ -441,11 +455,13 @@ class Configuracoes(ttk.Frame):
                      " Nada é apagado — elas voltam em Categorias quando você quiser.",
                 foreground=CORES["alerta"])
             self.btn_arquivar.state(["!disabled"])
+            self.btn_ver_sem_uso.state(["!disabled"])
         else:
             self.lbl_sem_uso.configure(
                 text="Todas as suas categorias estão em uso. Nada a arrumar aqui.",
                 foreground=CORES["sucesso"])
             self.btn_arquivar.state(["disabled"])
+            self.btn_ver_sem_uso.state(["disabled"])
 
     def fechar_competencia(self) -> None:
         indice = self.cb_fecho.current()
@@ -493,8 +509,23 @@ class Configuracoes(ttk.Frame):
         self.recarregar()
         self.app.notificar(f"{services.mes_nome(fechado).capitalize()} reaberto.")
 
+    def alternar_lembrete(self) -> None:
+        services.definir_lembrete(bool(self.var_lembrar_fecho.get()))
+        self.app.notificar(
+            "Aviso de fechamento ligado." if self.var_lembrar_fecho.get()
+            else "Não aviso mais sobre fechamento.")
+        self.recarregar()
+
     def abrir_trilha(self) -> None:
         JanelaTrilha(self)
+
+    def ver_sem_uso(self) -> None:
+        janela = JanelaCategoriasSemUso(self, self._apos_arquivar)
+        self.wait_window(janela)
+        self.recarregar()
+
+    def _apos_arquivar(self) -> None:
+        self.app.atualizar_dependentes()
 
     def arquivar_sem_uso(self) -> None:
         if not self._sem_uso:
@@ -885,3 +916,119 @@ class JanelaTrilha(tk.Toplevel):
                     linha["partidas"], linha["motivo"],
                     "existe" if linha["ainda_existe"] else "apagado"])
         messagebox.showinfo("Pronto", f"Arquivo salvo em:\n{caminho}", parent=self)
+
+
+# --------------------------------------------------------------------------- #
+class JanelaCategoriasSemUso(tk.Toplevel):
+    """Ver o que há dentro de cada categoria antes de decidir arquivá-la.
+
+    Arquivar é uma decisão pequena, mas é uma decisão. A pessoa merece ver a
+    prova — lançamentos, contas, tetos, metas, tudo em zero — em vez de confiar
+    na palavra do programa de que aquilo "nunca foi usado".
+    """
+
+    def __init__(self, master, ao_mudar=None):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.title("Categorias que nunca foram usadas")
+        self.ao_mudar = ao_mudar
+
+        cabecalho = Cabecalho(
+            self, "Categorias que nunca foram usadas",
+            "Vieram do plano de contas padrão. Confira o que há em cada uma e escolha o"
+            " que tirar do caminho.")
+        cabecalho.pack(fill="x")
+        cabecalho.botao("Arquivar as escolhidas", self.arquivar_escolhidas,
+                        "Primario.TButton")
+        cabecalho.botao("Arquivar todas", self.arquivar_todas)
+        cabecalho.botao("Fechar", self.destroy)
+        ttk.Separator(self).pack(fill="x")
+
+        corpo = ttk.Frame(self, padding=(20, 16))
+        corpo.pack(fill="both", expand=True)
+
+        self.tabela = Tabela(corpo, [
+            ("codigo", "Código", 90, "w"),
+            ("nome", "Categoria", 240, "w"),
+            ("grupo", "Dentro de", 180, "w"),
+            ("tipo", "Tipo", 110, "w"),
+            ("lancamentos", "Lançamentos", 100, "center"),
+            ("ligacoes", "Ligada a", 160, "w"),
+        ], largura_livre=True, altura=12, selecao_multipla=True)
+        self.tabela.definir_texto_vazio(
+            "Todas as suas categorias estão em uso. Nada a arrumar aqui.")
+        self.tabela.pack(fill="both", expand=True)
+
+        ttk.Label(corpo,
+                  text="Escolha uma ou mais linhas (segure Ctrl ou Shift) e clique em"
+                       " 'Arquivar as escolhidas'. Arquivar não apaga nada: a categoria"
+                       " some dos seletores e volta quando você quiser, na tela"
+                       " Categorias.",
+                  style="Dica.TLabel", wraplength=880,
+                  justify="left").pack(anchor="w", pady=(12, 0))
+        self.lbl_resumo = ttk.Label(corpo, style="Secao.TLabel")
+        self.lbl_resumo.pack(anchor="w", pady=(8, 0))
+
+        self.recarregar()
+        centralizar(self, 980, 560)
+        self.grab_set()
+
+    # ------------------------------------------------------------------ #
+    def recarregar(self) -> None:
+        self.candidatas = services.detalhe_das_contas_sem_uso()
+        self.tabela.limpar()
+        for linha in self.candidatas:
+            self.tabela.inserir(
+                (linha["codigo"], linha["nome"], linha["grupo"] or "—", linha["rotulo"],
+                 str(linha["lancamentos"]), self._ligacoes(linha)),
+                iid=str(linha["id"]),
+                tags=() if linha["vazia"] else ("negativo",))
+        self.tabela.finalizar()
+        self.lbl_resumo.configure(
+            text=f"{len(self.candidatas)} categoria(s) sem nenhum uso."
+            if self.candidatas else "Nenhuma categoria sobrando.")
+
+    @staticmethod
+    def _ligacoes(linha: dict) -> str:
+        """O que existe amarrado nesta categoria, dito por extenso."""
+        partes = [(linha["titulos"], "conta(s) a pagar"),
+                  (linha["contas_fixas"], "conta(s) fixa(s)"),
+                  (linha["orcamentos"], "teto(s)"),
+                  (linha["metas"], "meta(s)"),
+                  (linha["compras"], "compra(s) parcelada(s)"),
+                  (linha["filhas"], "subcategoria(s)"),
+                  (linha["regras"], "regra(s) de importação")]
+        texto = ", ".join(f"{n} {nome}" for n, nome in partes if n)
+        return texto or "nada"
+
+    def _escolhidas(self) -> list[dict]:
+        ids = {int(item) for item in self.tabela.tree.selection()}
+        return [c for c in self.candidatas if c["id"] in ids]
+
+    def arquivar_escolhidas(self) -> None:
+        escolhidas = self._escolhidas()
+        if not escolhidas:
+            messagebox.showinfo(
+                "Arquivar", "Escolha antes uma ou mais categorias na lista.", parent=self)
+            return
+        self._arquivar(escolhidas)
+
+    def arquivar_todas(self) -> None:
+        if not self.candidatas:
+            return
+        self._arquivar(self.candidatas)
+
+    def _arquivar(self, alvos: list[dict]) -> None:
+        nomes = "\n".join(f"  · {c['codigo']}  {c['nome']}" for c in alvos[:15])
+        resto = f"\n  ... e mais {len(alvos) - 15}" if len(alvos) > 15 else ""
+        if not messagebox.askyesno(
+                "Arquivar categorias",
+                f"Arquivar {len(alvos)} categoria(s)?\n\n{nomes}{resto}\n\n"
+                "Elas saem dos seletores mas não são apagadas: para usar qualquer uma"
+                " de novo, basta reativá-la na tela Categorias.", parent=self):
+            return
+        total = services.arquivar_contas_sem_uso([c["id"] for c in alvos])
+        self.recarregar()
+        if self.ao_mudar:
+            self.ao_mudar()
+        messagebox.showinfo("Pronto", f"{total} categoria(s) arquivada(s).", parent=self)

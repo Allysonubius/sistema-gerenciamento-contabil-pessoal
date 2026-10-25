@@ -3848,6 +3848,129 @@ def contas_sem_uso() -> list[dict]:
                 f" AND {where} ORDER BY c.codigo")]
 
 
+def meses_a_fechar() -> list[str]:
+    """Meses que já terminaram e continuam abertos, do mais antigo ao mais novo."""
+    resumo = resumo_fechamento()
+    meses, atual = [], resumo["proximo"]
+    while atual and atual <= resumo["ultimo_fechavel"]:
+        meses.append(atual)
+        atual = _mes_seguinte(atual)
+    return meses
+
+
+def lembrete_de_fechamento() -> dict:
+    """O aviso de que há mês esperando para ser fechado.
+
+    O fechamento só vale se acontecer: deixar para quando lembrar é o mesmo que
+    não ter. Por isso o aviso é do próprio programa, aparece no mês seguinte e
+    volta sempre, até o mês ser fechado ou o usuário dizer que não quer.
+    """
+    pendentes = meses_a_fechar()
+    if not pendentes:
+        return {"pendente": False, "meses": [], "quantos": 0, "primeiro": "",
+                "nome": "", "lancamentos": 0, "ligado": lembrete_ligado()}
+    primeiro = pendentes[0]
+    row = db.query_one(
+        "SELECT COUNT(*) AS n FROM lancamento WHERE substr(data,1,7) <= ?", (primeiro,))
+    return {
+        "pendente": True,
+        "meses": pendentes,
+        "quantos": len(pendentes),
+        "primeiro": primeiro,
+        "nome": mes_nome(primeiro),
+        "lancamentos": int(row["n"]) if row else 0,
+        "ligado": lembrete_ligado(),
+    }
+
+
+def lembrete_ligado() -> bool:
+    return db.get_config("lembrar_fechamento", "1") == "1"
+
+
+def definir_lembrete(ligado: bool) -> None:
+    db.set_config("lembrar_fechamento", "1" if ligado else "0")
+    if ligado:
+        db.set_config("fechamento_adiado_ate", "")
+
+
+def adiar_lembrete(dias: int = 7) -> str:
+    """'Depois' — o aviso cala por alguns dias e volta por conta própria."""
+    volta = (date.today() + timedelta(days=max(1, dias))).isoformat()
+    db.set_config("fechamento_adiado_ate", volta)
+    return volta
+
+
+def deve_lembrar_fechamento() -> bool:
+    """Mostrar o aviso agora?"""
+    if not lembrete_ligado():
+        return False
+    adiado = db.get_config("fechamento_adiado_ate", "")
+    if adiado and hoje_iso() < adiado:
+        return False
+    return lembrete_de_fechamento()["pendente"]
+
+
+# --------------------------------------------------------------------------- #
+# O que existe dentro de uma conta
+# --------------------------------------------------------------------------- #
+# Arquivar uma categoria é uma decisão pequena, mas é uma decisão: a pessoa
+# merece ver o que há dentro antes de dizer sim, em vez de confiar na palavra
+# do programa de que "nunca foi usada".
+def uso_da_conta(conta_id: int) -> dict:
+    """Tudo o que está ligado a uma conta, contado um a um."""
+    def contar(sql: str, *params) -> int:
+        linha = db.query_one(sql, params)
+        return int(linha["n"]) if linha else 0
+
+    movimento = db.query_one(
+        "SELECT COUNT(*) AS n, COALESCE(SUM(p.valor),0) AS total, MAX(l.data) AS ultimo"
+        " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+        " WHERE p.conta_id = ?", (conta_id,))
+    conta = obter_conta(conta_id)
+    return {
+        "id": conta_id,
+        "nome": conta["nome"] if conta else "",
+        "codigo": conta["codigo"] if conta else "",
+        "ativa": bool(conta["ativo"]) if conta else False,
+        "lancamentos": int(movimento["n"]) if movimento else 0,
+        "movimentado": round(float(movimento["total"] or 0), 2) if movimento else 0.0,
+        "ultimo_uso": (movimento["ultimo"] or "") if movimento else "",
+        "titulos": contar("SELECT COUNT(*) AS n FROM titulo WHERE conta_id = ?"
+                          " OR conta_pagamento_id = ?", conta_id, conta_id),
+        "contas_fixas": contar("SELECT COUNT(*) AS n FROM recorrencia WHERE conta_id = ?"
+                               " OR conta_pagamento_id = ?", conta_id, conta_id),
+        "orcamentos": contar("SELECT COUNT(*) AS n FROM orcamento WHERE conta_id = ?",
+                             conta_id),
+        "metas": contar("SELECT COUNT(*) AS n FROM meta WHERE conta_id = ?", conta_id),
+        "compras": contar("SELECT COUNT(*) AS n FROM compra_parcelada WHERE cartao_id = ?"
+                          " OR categoria_id = ?", conta_id, conta_id),
+        "filhas": contar("SELECT COUNT(*) AS n FROM conta WHERE pai_id = ?", conta_id),
+        "regras": contar("SELECT COUNT(*) AS n FROM regra_categoria WHERE conta_id = ?",
+                         conta_id),
+    }
+
+
+def esta_vazia(uso: dict) -> bool:
+    """Nada em lugar nenhum — é o que autoriza arquivar sem pensar duas vezes."""
+    return not any(uso[chave] for chave in (
+        "lancamentos", "titulos", "contas_fixas", "orcamentos", "metas", "compras",
+        "filhas", "regras"))
+
+
+def detalhe_das_contas_sem_uso() -> list[dict]:
+    """As candidatas a arquivar, cada uma com a prova de que está vazia."""
+    detalhes = []
+    for conta in contas_sem_uso():
+        uso = uso_da_conta(conta["id"])
+        pai = db.query_one(
+            "SELECT p.nome FROM conta c LEFT JOIN conta p ON p.id = c.pai_id"
+            " WHERE c.id = ?", (conta["id"],))
+        detalhes.append({**conta, **uso,
+                         "grupo": (pai["nome"] if pai and pai["nome"] else ""),
+                         "vazia": esta_vazia(uso)})
+    return detalhes
+
+
 def arquivar_contas_sem_uso(ids: list[int] | None = None) -> int:
     """Tira do caminho as categorias sem uso — sem apagar nada.
 
