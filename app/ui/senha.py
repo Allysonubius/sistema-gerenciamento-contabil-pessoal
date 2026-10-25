@@ -24,7 +24,12 @@ class _JanelaDeSenha(tk.Toplevel):
 
     def __init__(self, master, titulo: str, largura: int, altura: int):
         super().__init__(master)
-        self.transient(master)
+        # Transient de uma janela escondida nasce escondida junto: no Windows o
+        # gerenciador segue o dono. A janela principal está retraída de
+        # propósito enquanto a senha não confere, então aqui a dependência só
+        # entra quando ela já está à vista.
+        if master.winfo_ismapped():
+            self.transient(master)
         self.title(f"{APP_NAME} — {titulo}")
         self.resizable(False, False)
         self.liberado = False
@@ -38,8 +43,24 @@ class _JanelaDeSenha(tk.Toplevel):
 
     def finalizar(self, primeiro_campo: ttk.Entry) -> None:
         centralizar(self, self._largura, self._altura)
+        self.chamar_a_atencao()
         self.grab_set()
         primeiro_campo.focus_set()
+
+    def chamar_a_atencao(self) -> None:
+        """Garante que a janela apareça na frente e receba o teclado.
+
+        Sem a janela principal visível atrás, esta é a única coisa na tela: se
+        ela nascer atrás de outro programa, parece que o sistema não abriu.
+        """
+        self.deiconify()
+        self.lift()
+        self.attributes("-topmost", True)
+        self.after(400, lambda: self.winfo_exists() and self.attributes("-topmost", False))
+        try:
+            self.focus_force()
+        except tk.TclError:          # pragma: no cover - janela já fechada
+            pass
 
     def desistir(self) -> None:
         self.liberado = False
@@ -262,15 +283,27 @@ class DialogoEsqueci(tk.Toplevel):
         self.ao_apagar()
 
 
-def abrir_porta(janela: tk.Misc) -> bool:
+INTERVALO_SEGUNDA_ABERTURA_MS = 800
+
+
+def abrir_porta(janela: tk.Misc, ao_pedirem_de_novo=None) -> bool:
     """Deixa entrar? Cria a senha no primeiro uso e a pede nos demais.
 
-    ``janela`` é a aplicação, ainda escondida: nenhum número aparece antes de a
-    senha conferir.
+    ``janela`` é a aplicação, ainda retraída: nenhum número aparece antes de a
+    senha conferir. ``ao_pedirem_de_novo`` é chamado de tempos em tempos para
+    atender quem clicou no ícone enquanto esta janela estava aberta.
     """
-    if not seguranca.tem_senha():
-        dialogo = DialogoCriarSenha(janela)
-    else:
-        dialogo = DialogoEntrar(janela)
+    dialogo = (DialogoCriarSenha(janela) if not seguranca.tem_senha()
+               else DialogoEntrar(janela))
+
+    if ao_pedirem_de_novo is not None:
+        def vigiar() -> None:
+            if not dialogo.winfo_exists():
+                return
+            ao_pedirem_de_novo(dialogo)
+            dialogo.after(INTERVALO_SEGUNDA_ABERTURA_MS, vigiar)
+
+        dialogo.after(INTERVALO_SEGUNDA_ABERTURA_MS, vigiar)
+
     janela.wait_window(dialogo)
     return bool(dialogo.liberado)

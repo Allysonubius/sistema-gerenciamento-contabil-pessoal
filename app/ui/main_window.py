@@ -307,8 +307,18 @@ class Aplicacao(tk.Tk):
             return True
         from app.ui.senha import abrir_porta
 
-        self._porta_aberta = abrir_porta(self)
+        self._porta_aberta = abrir_porta(self, self._atender_segunda_abertura)
         return self._porta_aberta
+
+    def _atender_segunda_abertura(self, dialogo) -> None:
+        """Clicou no ícone de novo enquanto a senha estava sendo pedida.
+
+        Sem isto, a segunda abertura só avisava a primeira — que estava parada
+        na senha e não ouvia ninguém — e dava a impressão de que o programa
+        tinha deixado de abrir.
+        """
+        if instancia.consumir_pedido() and dialogo.winfo_exists():
+            dialogo.chamar_a_atencao()
 
     def _montar_bandeja(self) -> None:
         self.bandeja = BandejaSistema(
@@ -486,22 +496,57 @@ class Aplicacao(tk.Tk):
             return
 
         destino = resultado["caminho"]
+        atalhos = resultado["atalhos"]
+        feitos = [nome for nome, ok in (("no menu Iniciar", atalhos["menu"]),
+                                        ("na área de trabalho", atalhos["area_trabalho"]))
+                  if ok]
+        recado = ("Atalho criado " + " e ".join(feitos) + "." if feitos else
+                  "Não consegui criar os atalhos — o programa está instalado do mesmo"
+                  " jeito e aparece na lista de aplicativos do Windows.")
         if not messagebox.askyesno(
                 "Pronto",
-                f"Instalado em:\n{destino}\n\n"
+                f"Instalado em:\n{destino}\n\n{recado}\n\n"
                 "Quer que eu feche esta janela e abra a cópia instalada agora?",
                 parent=self):
             self.notificar("Programa instalado neste computador.")
             return
+        self._trocar_para_a_copia_instalada(destino)
+
+    def _trocar_para_a_copia_instalada(self, destino) -> None:
+        """Fecha esta janela e sobe a cópia instalada — nessa ordem.
+
+        A ordem é o ponto. A trava de instância única é um mutex preso a este
+        processo: subindo a cópia instalada antes, ela se enxerga como segunda
+        janela, avisa esta e encerra sozinha. Somado a um `encerrando` ligado
+        cedo demais, que fazia `encerrar` voltar na primeira linha, o resultado
+        era a instalação parecer não ter acontecido: nada novo abria, e nada
+        fechava.
+        """
+        import logging
         import subprocess
 
+        self._encerrando = True
+        try:
+            if db.get_config("backup_ao_sair") == "1":
+                db.backup_automatico()
+        except Exception:
+            logging.exception("Falha ao salvar a cópia antes de trocar de executável")
+        try:
+            self.bandeja.parar()
+        except Exception:
+            logging.exception("Falha ao encerrar o ícone da bandeja")
+        db.fechar()
+        instancia.liberar()
         try:
             subprocess.Popen([str(destino)], close_fds=True)
+            logging.info("Cópia instalada iniciada: %s", destino)
         except OSError as erro:
-            messagebox.showwarning("Não foi possível abrir", str(erro), parent=self)
-            return
-        self._encerrando = True
-        self.encerrar()
+            logging.exception("Não foi possível abrir a cópia instalada")
+            messagebox.showwarning(
+                "Não foi possível abrir",
+                f"O programa foi instalado, mas não consegui abri-lo:\n\n{erro}\n\n"
+                "Use o atalho no menu Iniciar.", parent=self)
+        self.destroy()
 
     def atualizar_dependentes(self) -> None:
         """Mantém o painel coerente depois de gravações em outras telas."""

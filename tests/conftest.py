@@ -23,11 +23,15 @@ def sistema(tmp_path, monkeypatch):
     """Devolve o módulo `services` ligado a um banco limpo e isolado."""
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
 
-    # Recarrega a cadeia de módulos para que os caminhos sejam relidos.
-    for nome in ("app.services", "app.db", "app.config",
-                 "app.seguranca", "app.atualizacao", "app.instalacao"):
-        if nome in sys.modules:
-            del sys.modules[nome]
+    # Recarrega a cadeia inteira para que os caminhos sejam relidos.
+    #
+    # Todo módulo de `app` precisa sair, não só os três do núcleo: as telas
+    # guardam `services` e `db` nos próprios globais, e um módulo de tela que
+    # sobrevivesse ao teste anterior continuaria apontando para o banco
+    # temporário daquele teste — que o pytest já apagou. O sintoma era um
+    # "malformed database schema" surgindo só quando a ordem dos testes mudava.
+    for nome in [n for n in sys.modules if n == "app" or n.startswith("app.")]:
+        del sys.modules[nome]
     config = importlib.import_module("app.config")
     assert str(tmp_path) in str(config.DB_PATH), "o teste não pode usar o banco real"
 

@@ -123,8 +123,11 @@ def test_senha_errada_avisa_e_limpa_o_campo(senha_ui, raiz_tk):
 
 
 def test_a_janela_explica_quando_a_maquina_e_outra(senha_ui, raiz_tk, monkeypatch):
+    # A janela usa o módulo que ela mesma importou — é nele que o disfarce
+    # precisa entrar, não no que este arquivo importou lá em cima.
     seguranca.definir_senha("segredo123", "segredo123")
-    monkeypatch.setattr(seguranca, "_id_da_maquina", lambda: "outro-computador")
+    monkeypatch.setattr(senha_ui.seguranca, "_id_da_maquina",
+                        lambda: "outro-computador")
     dialogo = senha_ui.DialogoEntrar(raiz_tk)
     dialogo.grab_release()
     try:
@@ -222,3 +225,65 @@ def test_desligar_o_aviso_de_versao_pela_tela(ajustes, sistema):
     ajustes.alternar_aviso_versao()
 
     assert atualizacao.verificacao_ligada() is False
+
+
+# --------------------------------------------------------------------------- #
+# A janela precisa aparecer
+# --------------------------------------------------------------------------- #
+def test_a_janela_aparece_com_a_principal_retraida(senha_ui, raiz_tk):
+    """O caso que deixou o programa invisível segurando a trava de instância.
+
+    A janela principal fica retraída até a senha conferir. Um Toplevel
+    ``transient`` de uma janela retraída nasce retraído junto — e o programa
+    ficava rodando sem nada na tela, sem abrir nem liberar o lugar.
+    """
+    raiz_tk.withdraw()
+    dialogo = senha_ui.DialogoCriarSenha(raiz_tk)
+    dialogo.grab_release()
+    try:
+        dialogo.update_idletasks()
+        dialogo.update()
+        assert bool(dialogo.winfo_ismapped()) is True
+    finally:
+        dialogo.destroy()
+
+
+def test_a_janela_de_entrar_tambem_aparece(senha_ui, raiz_tk):
+    seguranca.definir_senha("segredo123", "segredo123")
+    raiz_tk.withdraw()
+    dialogo = senha_ui.DialogoEntrar(raiz_tk)
+    dialogo.grab_release()
+    try:
+        dialogo.update_idletasks()
+        dialogo.update()
+        assert bool(dialogo.winfo_ismapped()) is True
+    finally:
+        dialogo.destroy()
+
+
+def test_chamar_a_atencao_nao_quebra_janela_fechada(senha_ui, raiz_tk):
+    dialogo = senha_ui.DialogoCriarSenha(raiz_tk)
+    dialogo.grab_release()
+    dialogo.destroy()
+    raiz_tk.update()            # deixa o after agendado disparar sem erro
+
+
+def test_abrir_porta_atende_quem_clicou_de_novo(senha_ui, raiz_tk):
+    """Clicar no ícone outra vez traz a janela da senha para a frente."""
+    chamadas = []
+    seguranca.definir_senha("segredo123", "segredo123")
+
+    def responder(dialogo):
+        chamadas.append(dialogo)
+        dialogo.var_senha.set("segredo123")
+        dialogo.entrar()
+
+    raiz_tk.withdraw()
+    monitorado = senha_ui.INTERVALO_SEGUNDA_ABERTURA_MS
+    senha_ui.INTERVALO_SEGUNDA_ABERTURA_MS = 50
+    try:
+        assert senha_ui.abrir_porta(raiz_tk, responder) is True
+        assert chamadas
+    finally:
+        senha_ui.INTERVALO_SEGUNDA_ABERTURA_MS = monitorado
+        raiz_tk.deiconify()

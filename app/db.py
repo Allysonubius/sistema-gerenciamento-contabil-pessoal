@@ -388,19 +388,102 @@ def _sem_acento(texto: str | None) -> str:
     return "".join(c for c in decomposto if not unicodedata.combining(c)).lower()
 
 
+class BancoDanificadoError(Exception):
+    """O arquivo de dados não abre e não deu para consertar sozinho."""
+
+    def __init__(self, motivo: str, copias: list[Path]):
+        self.motivo = motivo
+        self.copias = copias
+        super().__init__(motivo)
+
+
+def _indices_orfaos(conexao: sqlite3.Connection) -> list[str]:
+    """Índices cuja página-raiz está além do fim do arquivo.
+
+    É o estrago típico de um VACUUM interrompido: o arquivo encolhe, mas o
+    catálogo continua apontando para páginas que não existem mais. O SQLite
+    recusa abrir o banco inteiro por causa disso, mesmo com todas as tabelas
+    intactas — e índice, ao contrário de tabela, se refaz do zero.
+    """
+    paginas = os.path.getsize(DB_PATH) // conexao.execute("PRAGMA page_size").fetchone()[0]
+    conexao.execute("PRAGMA writable_schema = ON")
+    try:
+        return [linha[0] for linha in conexao.execute(
+            "SELECT name FROM sqlite_schema WHERE type = 'index' AND rootpage > ?",
+            (paginas,))]
+    finally:
+        conexao.execute("PRAGMA writable_schema = OFF")
+
+
+def _curar_indices(conexao: sqlite3.Connection) -> list[str]:
+    """Apaga do catálogo os índices órfãos. Eles voltam na própria migração."""
+    orfaos = _indices_orfaos(conexao)
+    if not orfaos:
+        return []
+    conexao.execute("PRAGMA writable_schema = ON")
+    for nome in orfaos:
+        conexao.execute("DELETE FROM sqlite_schema WHERE type='index' AND name = ?", (nome,))
+    conexao.commit()
+    conexao.execute("PRAGMA writable_schema = OFF")
+    logging.warning("Índices órfãos removidos do catálogo: %s", ", ".join(orfaos))
+    return orfaos
+
+
+def copias_disponiveis() -> list[Path]:
+    """As cópias de segurança, da mais recente para a mais antiga."""
+    if not BACKUP_DIR.is_dir():
+        return []
+    return sorted(BACKUP_DIR.glob("contabil_*.db"),
+                  key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def _abrir_arquivo() -> sqlite3.Connection:
+    conexao = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conexao.row_factory = sqlite3.Row
+    conexao.create_function("sem_acento", 1, _sem_acento, deterministic=True)
+    conexao.execute("PRAGMA foreign_keys = ON")
+    conexao.execute("PRAGMA journal_mode = WAL")
+    conexao.execute("PRAGMA synchronous = NORMAL")
+    return conexao
+
+
 def get_connection() -> sqlite3.Connection:
-    """Retorna a conexão única (criando e migrando o banco na primeira chamada)."""
+    """Retorna a conexão única (criando e migrando o banco na primeira chamada).
+
+    Um catálogo com índice órfão derrubava a abertura inteira, antes de existir
+    qualquer janela: o programa morria sem nada na tela. Agora a primeira
+    tentativa que falhar assim é seguida de um conserto, e só um estrago que
+    nem isso resolve vira erro — aí com as cópias de segurança no colo.
+    """
     global _conn
     with _lock:
         if _conn is None:
             ensure_dirs()
-            _conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-            _conn.row_factory = sqlite3.Row
-            _conn.create_function("sem_acento", 1, _sem_acento, deterministic=True)
-            _conn.execute("PRAGMA foreign_keys = ON")
-            _conn.execute("PRAGMA journal_mode = WAL")
-            _conn.execute("PRAGMA synchronous = NORMAL")
-            _migrate(_conn)
+            try:
+                _conn = _abrir_arquivo()
+                _migrate(_conn)
+            except sqlite3.DatabaseError as erro:
+                if _conn is not None:
+                    try:
+                        _conn.close()
+                    except sqlite3.Error:
+                        pass
+                    _conn = None
+                logging.error("Banco não abriu: %s — tentando consertar", erro)
+                try:
+                    reparo = sqlite3.connect(DB_PATH, check_same_thread=False)
+                    try:
+                        curados = _curar_indices(reparo)
+                    finally:
+                        reparo.close()
+                    if not curados:
+                        raise erro
+                    _conn = _abrir_arquivo()
+                    _migrate(_conn)
+                    logging.info("Banco recuperado: %d índice(s) refeito(s)", len(curados))
+                except sqlite3.DatabaseError as falha:
+                    _conn = None
+                    raise BancoDanificadoError(str(falha), copias_disponiveis()) from falha
         return _conn
 
 

@@ -82,3 +82,80 @@ def test_reparo_preserva_os_lancamentos(sistema, contas):
 
     assert sistema.saldo_conta(contas["banco"]) == antes
     assert len(sistema.listar_lancamentos()) >= 2
+
+
+# --------------------------------------------------------------------------- #
+# Banco que não abre
+# --------------------------------------------------------------------------- #
+def _quebrar_indice(caminho, nome: str) -> None:
+    """Faz um índice apontar para uma página além do fim do arquivo.
+
+    É o estrago típico de um VACUUM interrompido: o arquivo encolhe e o
+    catálogo continua apontando para páginas que não existem mais.
+    """
+    import sqlite3
+
+    conexao = sqlite3.connect(caminho)
+    paginas = conexao.execute("PRAGMA page_count").fetchone()[0]
+    conexao.execute("PRAGMA writable_schema = ON")
+    conexao.execute("UPDATE sqlite_schema SET rootpage = ? WHERE name = ?",
+                    (paginas + 50, nome))
+    conexao.commit()
+    conexao.close()
+
+
+def test_indice_orfao_e_consertado_na_abertura(sistema, contas):
+    """Antes, o programa morria aqui — sem janela, sem aviso, sem nada."""
+    import importlib
+    import sys
+
+    from app import db
+
+    caminho = db.DB_PATH
+    db.fechar()
+    _quebrar_indice(caminho, "ix_lancamento_data")
+
+    importlib.reload(sys.modules["app.db"])
+    novo = sys.modules["app.db"]
+    conexao = novo.get_connection()
+
+    assert conexao.execute("SELECT COUNT(*) FROM conta").fetchone()[0] > 0
+    # O índice volta pela própria migração, que roda a cada abertura.
+    assert novo.query_one(
+        "SELECT 1 AS x FROM sqlite_master WHERE name = 'ix_lancamento_data'")
+
+
+def test_banco_sem_conserto_vira_erro_com_as_copias_na_mao(sistema, monkeypatch):
+    """Não dando para consertar, o programa precisa dizer isso e apontar a saída."""
+    import sqlite3
+
+    from app import db
+
+    db.fazer_backup()
+    monkeypatch.setattr(db, "_curar_indices", lambda _c: [])
+
+    def recusar(*_a, **_k):
+        raise sqlite3.DatabaseError("database disk image is malformed")
+
+    monkeypatch.setattr(db, "_abrir_arquivo", recusar)
+    db.fechar()
+
+    with pytest.raises(db.BancoDanificadoError) as erro:
+        db.get_connection()
+
+    assert "malformed" in erro.value.motivo
+    assert erro.value.copias, "o aviso precisa trazer as cópias de segurança"
+
+
+def test_as_copias_vem_da_mais_recente_para_a_mais_antiga(sistema):
+    import time
+
+    from app import db
+
+    primeira = db.fazer_backup()
+    time.sleep(1.1)
+    segunda = db.fazer_backup()
+    copias = db.copias_disponiveis()
+
+    assert copias[0] == segunda
+    assert primeira in copias

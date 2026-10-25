@@ -227,3 +227,68 @@ def test_a_chave_do_windows_nao_tem_barra_dobrada(sistema):
     """Uma barra a mais e o programa não apareceria na lista de aplicativos."""
     assert "\\\\" not in instalacao.CHAVE_DESINSTALAR
     assert instalacao.CHAVE_DESINSTALAR.endswith("\\SistemaContabil")
+
+
+# --------------------------------------------------------------------------- #
+# Trocar para a cópia instalada
+# --------------------------------------------------------------------------- #
+def test_a_trava_sai_antes_de_a_copia_instalada_subir(sistema, monkeypatch):
+    """A ordem do desligamento é o que fazia a instalação parecer não acontecer.
+
+    A trava de instância única é um mutex preso ao processo. Subindo a cópia
+    instalada antes de soltá-la, ela se enxerga como segunda janela, avisa esta
+    e encerra sozinha — nada novo abre, e nada fecha.
+    """
+    import subprocess
+
+    from app import db, instancia
+    from app.ui import main_window
+
+    ordem = []
+    monkeypatch.setattr(instancia, "liberar", lambda: ordem.append("soltou a trava"))
+    monkeypatch.setattr(db, "fechar", lambda: ordem.append("fechou o banco"))
+    monkeypatch.setattr(subprocess, "Popen",
+                        lambda *a, **k: ordem.append("abriu a cópia"))
+
+    class JanelaFalsa:
+        _encerrando = False
+        bandeja = type("B", (), {"parar": lambda self: None})()
+        _trocar_para_a_copia_instalada = main_window.Aplicacao._trocar_para_a_copia_instalada
+
+        def destroy(self):
+            ordem.append("fechou a janela")
+
+    JanelaFalsa()._trocar_para_a_copia_instalada("C:/qualquer/SistemaContabil.exe")
+
+    assert ordem.index("soltou a trava") < ordem.index("abriu a cópia")
+    assert ordem[-1] == "fechou a janela"
+
+
+def test_a_troca_fecha_a_janela_mesmo_se_a_copia_nao_subir(sistema, monkeypatch):
+    import subprocess
+
+    from app import db, instancia
+    from app.ui import main_window
+
+    fechou = []
+    monkeypatch.setattr(instancia, "liberar", lambda: None)
+    monkeypatch.setattr(db, "fechar", lambda: None)
+    monkeypatch.setattr(main_window.messagebox, "showwarning",
+                        lambda *a, **k: None)
+
+    def falhar(*_a, **_k):
+        raise OSError("sem permissão")
+
+    monkeypatch.setattr(subprocess, "Popen", falhar)
+
+    class JanelaFalsa:
+        _encerrando = False
+        bandeja = type("B", (), {"parar": lambda self: None})()
+        _trocar_para_a_copia_instalada = main_window.Aplicacao._trocar_para_a_copia_instalada
+
+        def destroy(self):
+            fechou.append(True)
+
+    JanelaFalsa()._trocar_para_a_copia_instalada("C:/qualquer/SistemaContabil.exe")
+
+    assert fechou == [True]

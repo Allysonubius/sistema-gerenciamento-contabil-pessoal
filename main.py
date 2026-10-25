@@ -30,6 +30,32 @@ def _tratar_excecao(tipo, valor, tb) -> None:
         traceback.print_exception(tipo, valor, tb)
 
 
+def _avisar_banco_danificado(erro) -> int:
+    """O arquivo de dados não abre: diz isso na cara, com a saída à mão.
+
+    Morrer em silêncio aqui é o pior dos mundos — o programa simplesmente não
+    aparecia, e quem estava do outro lado não tinha como saber por quê nem que
+    havia cópia de ontem esperando.
+    """
+    from tkinter import messagebox
+
+    logging.error("Banco danificado: %s", erro.motivo)
+    copias = erro.copias[:3]
+    lista = "\n".join(f"  · {c.name}" for c in copias) or "  (nenhuma encontrada)"
+    messagebox.showerror(
+        APP_NAME,
+        "O arquivo dos seus dados está danificado e não consegui consertá-lo.\n\n"
+        f"Detalhe técnico: {erro.motivo}\n\n"
+        "Os seus registros não se perderam: há cópias de segurança guardadas.\n"
+        f"As mais recentes são:\n{lista}\n\n"
+        "Elas ficam em:\n"
+        f"{(copias[0].parent if copias else LOG_PATH.parent / 'backups')}\n\n"
+        "Para voltar, renomeie a cópia mais recente para 'contabil.db' e coloque-a em:\n"
+        f"{LOG_PATH.parent}\n\n"
+        f"O que houve ficou registrado em:\n{LOG_PATH}")
+    return 1
+
+
 def _desinstalar() -> int:
     """Chamado pela lista de aplicativos do Windows, com --desinstalar."""
     from tkinter import messagebox
@@ -71,7 +97,10 @@ def main() -> int:
         return 0
 
     logging.info("Iniciando %s", APP_NAME)
-    db.get_connection()
+    try:
+        db.get_connection()
+    except db.BancoDanificadoError as erro:
+        return _avisar_banco_danificado(erro)
     # Se o programa mudou de pasta, a entrada de inicialização é reapontada.
     try:
         inicializacao.sincronizar()
