@@ -280,8 +280,8 @@ class Configuracoes(ttk.Frame):
         acoes_versao.pack(fill="x")
         ttk.Button(acoes_versao, text="Procurar atualizações agora",
                    command=self.procurar_atualizacao).pack(side="left")
-        self.btn_baixar = ttk.Button(acoes_versao, text="Abrir a página da versão nova",
-                                     command=self.abrir_pagina_versao)
+        self.btn_baixar = ttk.Button(acoes_versao, text="Ver o que mudou e atualizar",
+                                     command=self.abrir_versao_nova)
         self.btn_baixar.pack(side="left", padx=8)
         self.var_avisar_versao = tk.BooleanVar(value=atualizacao.verificacao_ligada())
         ttk.Checkbutton(acoes_versao, style="Superficie.TCheckbutton",
@@ -345,7 +345,11 @@ class Configuracoes(ttk.Frame):
             self.lbl_versao.configure(
                 text=f"Você está na versão mais recente ({estado['atual']}).{visto}",
                 foreground=CORES["sucesso"])
-        self.btn_baixar.state(["!disabled"] if estado["ha_novidade"] else ["disabled"])
+        # O botão fica sempre de pé: mesmo sem novidade, serve para relembrar o
+        # que mudou na versão que está rodando.
+        self.btn_baixar.configure(
+            text="Ver o que mudou e atualizar" if estado["ha_novidade"]
+            else "Ver o que mudou nesta versão")
 
     def trocar_senha(self) -> None:
         from app.ui.senha import DialogoCriarSenha
@@ -399,14 +403,15 @@ class Configuracoes(ttk.Frame):
             messagebox.showinfo(
                 "Versão nova",
                 f"Saiu a versão {estado['disponivel']}. Você está na {estado['atual']}.\n\n"
-                "Clique em 'Abrir a página da versão nova' para baixar.", parent=self)
+                "Clique em 'Ver o que mudou e atualizar'.", parent=self)
         else:
             messagebox.showinfo(
                 "Tudo em dia", f"Você já está na versão mais recente"
                                f" ({estado['atual']}).", parent=self)
 
-    def abrir_pagina_versao(self) -> None:
-        self.app.abrir_pagina_da_versao()
+    def abrir_versao_nova(self) -> None:
+        self.app.abrir_versao_nova()
+        self.recarregar()
 
     # ------------------------------------------------------------------ #
     def _atualizar_auditoria(self) -> None:

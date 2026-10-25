@@ -133,9 +133,16 @@ def verificar(forcar: bool = False) -> dict:
         guardado["falhou"] = True
         return guardado
 
-    _banco().set_config("ultima_consulta_versao", datetime.now().isoformat(timespec="seconds"))
-    _banco().set_config("ultima_versao_vista", dados["versao"])
-    _banco().set_config("ultima_pagina_versao", dados["pagina"])
+    banco = _banco()
+    banco.set_config("ultima_consulta_versao", datetime.now().isoformat(timespec="seconds"))
+    banco.set_config("ultima_versao_vista", dados["versao"])
+    banco.set_config("ultima_pagina_versao", dados["pagina"])
+    # O que mudou fica guardado junto: assim a tela conta a novidade sem voltar
+    # à rede — e sem mandar ninguém para o navegador.
+    banco.set_config("ultima_nota_versao", dados["notas"])
+    banco.set_config("ultimo_arquivo_versao", dados["arquivo"])
+    banco.set_config("ultimo_tamanho_versao", str(dados["tamanho"]))
+    banco.set_config("ultima_data_versao", dados["publicada_em"])
     return _montar(dados["versao"], dados["pagina"], dados)
 
 
@@ -147,14 +154,23 @@ def estado_guardado() -> dict:
 
 
 def _montar(versao: str, pagina: str, dados: dict | None) -> dict:
+    banco = _banco()
     tem = bool(versao) and mais_nova(versao)
+    try:
+        tamanho = int(banco.get_config("ultimo_tamanho_versao", "0") or 0)
+    except ValueError:
+        tamanho = 0
     return {
         "atual": APP_VERSION,
         "disponivel": versao or APP_VERSION,
         "ha_novidade": tem,
-        "ignorada": tem and versao == _banco().get_config("versao_ignorada", ""),
+        "ignorada": tem and versao == banco.get_config("versao_ignorada", ""),
         "pagina": pagina or URL_RELEASES,
-        "consultada_em": _banco().get_config("ultima_consulta_versao", ""),
+        "consultada_em": banco.get_config("ultima_consulta_versao", ""),
+        "notas": banco.get_config("ultima_nota_versao", ""),
+        "arquivo": banco.get_config("ultimo_arquivo_versao", ""),
+        "tamanho": tamanho,
+        "publicada_em": banco.get_config("ultima_data_versao", ""),
         "falhou": False,
         "detalhes": dados,
     }
@@ -173,3 +189,88 @@ def deve_avisar() -> bool:
     """Tem versão nova que o usuário ainda não mandou calar?"""
     estado = estado_guardado()
     return estado["ha_novidade"] and not estado["ignorada"]
+
+
+# --------------------------------------------------------------------------- #
+# Trazer a versão nova para cá
+# --------------------------------------------------------------------------- #
+# Sem navegador: o programa pergunta, conta o que mudou e, se o usuário mandar,
+# busca o arquivo ele mesmo. Mandar a pessoa procurar um .exe numa página e
+# achar o botão certo é pedir para ela errar.
+def em_texto(notas: str, largura: int = 96) -> str:
+    """As notas da release, de Markdown para texto corrido.
+
+    Não é um renderizador: é o bastante para a janela ficar legível sem trazer
+    uma biblioteca inteira para dentro do programa.
+    """
+    linhas = []
+    for bruta in (notas or "").replace("\r\n", "\n").split("\n"):
+        linha = bruta.rstrip()
+        if linha.startswith("```"):
+            continue
+        texto = linha.lstrip("#").strip() if linha.lstrip().startswith("#") else linha
+        texto = texto.replace("**", "").replace("`", "")
+        if texto.lstrip().startswith(("- ", "* ")):
+            recuo = len(texto) - len(texto.lstrip())
+            texto = " " * recuo + "•" + texto.lstrip()[1:]
+        if linha.lstrip().startswith("#"):
+            linhas.append("")
+            linhas.append(texto.upper() if linha.startswith("## ") else texto)
+            linhas.append("")
+        else:
+            linhas.append(texto)
+    # Mais de uma linha vazia seguida vira só uma.
+    saida: list[str] = []
+    for linha in linhas:
+        if linha or (saida and saida[-1]):
+            saida.append(linha)
+    return "\n".join(saida).strip()
+
+
+def baixar(destino, progresso=None, tempo_limite: float = 60.0):
+    """Traz o executável da versão nova. Devolve o caminho baixado.
+
+    ``progresso`` recebe (bytes_vindos, bytes_totais) de tempos em tempos. O
+    arquivo é escrito com outro nome e só no fim ganha o definitivo: uma queda
+    de conexão deixa lixo, não um executável pela metade.
+    """
+    from pathlib import Path
+
+    estado = estado_guardado()
+    url = estado["arquivo"]
+    if not url:
+        raise RuntimeError("Esta versão não trouxe um arquivo para baixar.")
+
+    destino = Path(destino)
+    destino.parent.mkdir(parents=True, exist_ok=True)
+    parcial = destino.with_suffix(destino.suffix + ".parcial")
+
+    requisicao = urllib.request.Request(url)
+    requisicao.add_header("User-Agent", f"SistemaContabil/{APP_VERSION}")
+    try:
+        with urllib.request.urlopen(requisicao, timeout=tempo_limite) as resposta:
+            total = int(resposta.headers.get("Content-Length") or estado["tamanho"] or 0)
+            vindos = 0
+            with open(parcial, "wb") as arquivo:
+                while True:
+                    pedaco = resposta.read(262144)
+                    if not pedaco:
+                        break
+                    arquivo.write(pedaco)
+                    vindos += len(pedaco)
+                    if progresso is not None:
+                        progresso(vindos, total)
+    except (urllib.error.URLError, OSError, TimeoutError) as erro:
+        parcial.unlink(missing_ok=True)
+        raise RuntimeError(f"Não consegui baixar a versão nova: {erro}") from erro
+
+    if estado["tamanho"] and vindos != estado["tamanho"]:
+        parcial.unlink(missing_ok=True)
+        raise RuntimeError(
+            "O arquivo veio incompleto"
+            f" ({vindos:,} de {estado['tamanho']:,} bytes). Tente de novo.")
+
+    destino.unlink(missing_ok=True)
+    parcial.rename(destino)
+    logging.info("Versão %s baixada em %s", estado["disponivel"], destino)
+    return destino

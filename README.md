@@ -71,10 +71,11 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 554 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 572 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
-caixa, poupança, a virada do mês, a senha de abertura, a instalação e o aviso de versão.
+caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
+do programa.
 Cada teste roda num banco temporário próprio — os seus dados nunca são tocados.
 
 ## Privacidade e o que não está aqui
@@ -339,10 +340,26 @@ Havendo novidade, aparece uma faixa no topo da janela e um aviso perto do relóg
 três saídas: *Ver o que mudou*, *Dispensar* e *Não avisar desta versão*. Em Ajustes dá
 para procurar na hora ou desligar a conferência.
 
+### Tudo acontece aqui dentro
+
+*Ver o que mudou* abre uma janela **do próprio programa**, não o navegador. Ela traz a
+descrição da versão nova em texto corrido, a data, o tamanho do arquivo e um botão
+único: **Baixar e atualizar**. O programa busca o executável, mostra o andamento,
+instala por cima e reabre. Os dados ficam onde estavam.
+
+Mandar a pessoa procurar um `.exe` numa página e achar o botão certo é pedir para ela
+errar — o programa já sabe o que mudou e onde está o arquivo.
+
+O download vai para um arquivo temporário e só no fim ganha o nome definitivo, e o
+tamanho recebido é conferido contra o anunciado: uma queda de conexão deixa lixo, nunca
+um executável pela metade.
+
+Mesmo sem novidade o botão continua servindo, para relembrar o que mudou na versão que
+está rodando.
+
 O programa **não se atualiza sozinho** — e isso é escolha, não falta: saber que a versão
-mudou vale mais do que descobrir depois que alguma coisa já está diferente na tela.
-Atualizar é baixar o `.exe` novo e abrir: ele se instala por cima, e os dados ficam onde
-estavam.
+mudou vale mais do que descobrir depois que alguma coisa já está diferente na tela. Quem
+clica é sempre o usuário.
 
 Sem internet, nada disso aparece e nada trava.
 
@@ -513,7 +530,7 @@ sistemacontabil/
     ├── instancia.py         garante uma única janela aberta
     ├── seguranca.py         senha de abertura, presa a este computador
     ├── instalacao.py        instalar, desinstalar e atalhos do Windows
-    ├── atualizacao.py       aviso de versão nova (releases do GitHub)
+    ├── atualizacao.py       aviso de versão nova e download (releases do GitHub)
     ├── importacao.py        leitura de OFX/CSV e sugestão de categoria
     ├── tray.py              ícone da bandeja (pystray)
     └── ui/

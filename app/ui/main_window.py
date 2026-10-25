@@ -231,7 +231,7 @@ class Aplicacao(tk.Tk):
         self.faixa_novidade.acoes([
             ("Dispensar", self.faixa_novidade.esconder),
             ("Não avisar desta versão", self._ignorar_versao),
-            ("Ver o que mudou", self.abrir_pagina_da_versao),
+            ("Ver o que mudou", self.abrir_versao_nova),
         ])
 
         self.corpo = ttk.Frame(self)
@@ -484,12 +484,12 @@ class Aplicacao(tk.Tk):
         self.faixa_fechamento.esconder()
         self.notificar("Não aviso mais sobre fechamento. Dá para religar em Ajustes.")
 
-    def abrir_pagina_da_versao(self) -> None:
-        import webbrowser
+    def abrir_versao_nova(self) -> None:
+        """Conta a novidade aqui dentro — ninguém precisa abrir navegador."""
+        from app.ui.versao import JanelaNovaVersao
 
-        from app import atualizacao
-
-        webbrowser.open(atualizacao.estado_guardado()["pagina"])
+        self.faixa_novidade.esconder()
+        JanelaNovaVersao(self, self._trocar_para_a_copia_instalada)
 
     # ------------------------------------------------------------------ #
     def _cuidar_da_instalacao(self) -> None:

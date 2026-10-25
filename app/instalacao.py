@@ -163,20 +163,23 @@ def _apagar_da_lista_de_programas() -> None:
         logging.exception("Não foi possível tirar o programa da lista do Windows")
 
 
-def instalar(atalho_na_area_de_trabalho: bool = True) -> dict:
+def instalar(atalho_na_area_de_trabalho: bool = True, origem=None) -> dict:
     """Copia o executável para a pasta do usuário e cria os atalhos.
 
     Devolve o que foi feito. Instalar por cima de uma versão já instalada
-    apenas troca o arquivo — é assim que a atualização manual funciona.
+    apenas troca o arquivo — é assim que a atualização funciona, seja a partir
+    do próprio programa em execução ou de um arquivo recém-baixado (``origem``).
     """
-    if not disponivel():
+    if origem is None and not disponivel():
         raise RuntimeError("A instalação só existe no executável do Windows.")
     if portatil():
         raise RuntimeError(
             "Este é o modo portátil: o programa e os dados andam juntos na mesma"
             " pasta e não devem ser instalados.")
 
-    origem = executavel_atual()
+    origem = Path(origem).resolve() if origem else executavel_atual()
+    if not origem.is_file():
+        raise RuntimeError(f"Arquivo não encontrado: {origem}")
     destino = caminho_instalado()
     destino.parent.mkdir(parents=True, exist_ok=True)
 

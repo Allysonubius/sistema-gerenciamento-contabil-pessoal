@@ -201,10 +201,11 @@ TOPICOS: list[tuple[str, str]] = [
     ("Saber quando sai uma vers\u00e3o nova",
      "Uma vez por dia o programa pergunta ao GitHub se saiu vers\u00e3o nova. Havendo,\n"
      "aparece uma faixa no topo da janela e um aviso perto do rel\u00f3gio.\n\n"
-     "Ele n\u00e3o se atualiza sozinho, de prop\u00f3sito: saber que a vers\u00e3o mudou vale mais\n"
-     "do que descobrir depois que alguma coisa j\u00e1 est\u00e1 diferente na tela.\n\n"
-     "Para atualizar, clique em 'Ver o que mudou', baixe o arquivo novo e abra: ele\n"
-     "se instala por cima e os seus dados ficam onde estavam.\n\n"
+     "Clique em 'Ver o que mudou': abre uma janela aqui mesmo, sem navegador,\n"
+     "contando o que a vers\u00e3o nova traz. O bot\u00e3o 'Baixar e atualizar' faz o resto \u2014\n"
+     "o programa busca o arquivo, mostra o andamento, se instala por cima e reabre.\n"
+     "Os seus dados ficam onde estavam.\n\n"
+     "Ele n\u00e3o se atualiza sozinho, de prop\u00f3sito: quem clica \u00e9 sempre voc\u00ea.\n\n"
      "Em 'Ajustes' d\u00e1 para procurar na hora ou desligar a confer\u00eancia. Sem internet,\n"
      "nada disso aparece e nada trava."),
 
