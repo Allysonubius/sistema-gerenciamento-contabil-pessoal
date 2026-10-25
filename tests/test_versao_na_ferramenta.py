@@ -264,3 +264,111 @@ def test_sem_novidade_a_janela_so_relembra(sistema, monkeypatch, raiz_tk):
         janela.destroy()
         for filho in raiz_tk.winfo_children():
             filho.destroy()
+
+
+# --------------------------------------------------------------------------- #
+# Quando não dá, o programa diz por quê
+# --------------------------------------------------------------------------- #
+def _falhar_com(monkeypatch, excecao):
+    def erguer(*_a, **_k):
+        raise excecao
+    monkeypatch.setattr(atualizacao.urllib.request, "urlopen", erguer)
+
+
+def test_limite_de_consultas_e_explicado(sistema, monkeypatch):
+    """'Confira a sua internet' seria um palpite errado aqui."""
+    import io as _io
+    import urllib.error
+
+    _falhar_com(monkeypatch, urllib.error.HTTPError(
+        "u", 403, "e", {}, _io.BytesIO(b'{"message":"API rate limit exceeded for x."}')))
+    estado = atualizacao.verificar(forcar=True)
+
+    assert estado["falhou"] is True
+    assert "excesso de consultas" in estado["motivo"]
+    assert "60 por hora" in estado["motivo"]
+
+
+def test_sem_internet_e_explicado(sistema, monkeypatch):
+    import urllib.error
+
+    _falhar_com(monkeypatch, urllib.error.URLError("getaddrinfo failed"))
+
+    assert "Não cheguei até o GitHub" in atualizacao.verificar(forcar=True)["motivo"]
+
+
+def test_demora_demais_e_explicada(sistema, monkeypatch):
+    _falhar_com(monkeypatch, TimeoutError())
+
+    assert "não respondeu em" in atualizacao.verificar(forcar=True)["motivo"]
+
+
+def test_certificado_recusado_e_explicado(sistema, monkeypatch):
+    import urllib.error
+
+    _falhar_com(monkeypatch, urllib.error.URLError("certificate verify failed"))
+
+    assert "conexão segura" in atualizacao.verificar(forcar=True)["motivo"]
+
+
+def test_rede_que_exige_login_e_explicada(sistema, monkeypatch):
+    """Wi-Fi de hotel devolve HTML no lugar do JSON."""
+    class Portal:
+        def read(self): return b"<html>entre com o seu quarto</html>"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(atualizacao.urllib.request, "urlopen", lambda *a, **k: Portal())
+
+    assert "exige login" in atualizacao.verificar(forcar=True)["motivo"]
+
+
+def test_resposta_sem_versao_mostra_o_que_veio(sistema, monkeypatch):
+    class Vazia:
+        def read(self): return b'{"message":"Not Found","status":"404"}'
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(atualizacao.urllib.request, "urlopen", lambda *a, **k: Vazia())
+    motivo = atualizacao.verificar(forcar=True)["motivo"]
+
+    assert "sem versão publicada" in motivo
+    assert "Not Found" in motivo
+
+
+def test_erro_do_github_traz_o_codigo(sistema, monkeypatch):
+    import io as _io
+    import urllib.error
+
+    _falhar_com(monkeypatch, urllib.error.HTTPError(
+        "u", 503, "e", {}, _io.BytesIO(b'{"message":"em manutencao"}')))
+    motivo = atualizacao.verificar(forcar=True)["motivo"]
+
+    assert "503" in motivo and "manutencao" in motivo
+
+
+def test_deu_certo_limpa_o_motivo(sistema, monkeypatch):
+    import io as _io
+    import urllib.error
+
+    _falhar_com(monkeypatch, urllib.error.URLError("sem rede"))
+    atualizacao.verificar(forcar=True)
+    assert atualizacao.ultimo_motivo()
+
+    monkeypatch.setattr(atualizacao, "consultar", lambda *a, **k: {
+        "versao": "99.0.0", "nome": "", "notas": "", "pagina": "p",
+        "arquivo": "", "tamanho": 0, "publicada_em": ""})
+
+    assert atualizacao.verificar(forcar=True)["motivo"] == ""
+
+
+def test_a_falha_fica_no_registro(sistema, monkeypatch, caplog):
+    """Sem rastro no log, descobrir o que houve depois é impossível."""
+    import logging
+    import urllib.error
+
+    _falhar_com(monkeypatch, urllib.error.URLError("sem rede"))
+    with caplog.at_level(logging.WARNING):
+        atualizacao.verificar(forcar=True)
+
+    assert any("Consulta de versão falhou" in r.message for r in caplog.records)

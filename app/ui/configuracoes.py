@@ -335,8 +335,9 @@ class Configuracoes(ttk.Frame):
         visto = f"  Conferido em {services.para_br(quando)}." if quando else ""
         if estado.get("falhou"):
             self.lbl_versao.configure(
-                text=f"Você está na versão {estado['atual']}. Não consegui falar com o"
-                     " GitHub agora — pode ser a internet.", foreground=CORES["alerta"])
+                text=f"Você está na versão {estado['atual']}. "
+                     + (estado.get("motivo") or "Não consegui falar com o GitHub agora."),
+                foreground=CORES["alerta"])
         elif estado["ha_novidade"]:
             self.lbl_versao.configure(
                 text=f"Saiu a versão {estado['disponivel']} — você está na"
@@ -404,9 +405,11 @@ class Configuracoes(ttk.Frame):
         self._mostrar_versao(estado)
         if estado.get("falhou"):
             messagebox.showwarning(
-                "Sem resposta",
-                "Não consegui falar com o GitHub agora. Confira a sua internet e"
-                " tente de novo.", parent=self)
+                "Não deu para conferir",
+                (estado.get("motivo")
+                 or "Não consegui falar com o GitHub agora.")
+                + "\n\nO detalhe também fica registrado no arquivo de log, em Ajustes"
+                  " → Abrir a pasta dos dados.", parent=self)
         elif estado["ha_novidade"]:
             self.app._anunciar_versao_nova()
             messagebox.showinfo(

@@ -89,22 +89,87 @@ def esta_na_hora() -> bool:
     return datetime.now() - anterior >= timedelta(hours=HORAS_ENTRE_CONSULTAS)
 
 
+# A última falha da consulta, em linguagem de gente. Fica aqui porque "não
+# consegui falar com o GitHub, confira a sua internet" é inútil quando o
+# problema é outro — e descobrir qual era dava trabalho demais.
+_ultimo_motivo = ""
+
+
+def ultimo_motivo() -> str:
+    return _ultimo_motivo
+
+
+def _anotar(motivo: str) -> None:
+    global _ultimo_motivo
+    _ultimo_motivo = motivo
+    logging.warning("Consulta de versão falhou: %s", motivo)
+
+
+def _explicar_http(erro: urllib.error.HTTPError) -> str:
+    """Traduz o código HTTP para o que a pessoa pode fazer a respeito."""
+    try:
+        corpo = json.loads(erro.read() or b"{}")
+        recado = str(corpo.get("message", "")).strip()
+    except (ValueError, OSError):
+        recado = ""
+    if erro.code == 403 and "rate limit" in recado.lower():
+        return ("O GitHub recusou por excesso de consultas deste computador"
+                " (limite de 60 por hora). Tente daqui a pouco.")
+    if erro.code == 404:
+        return "O repositório ou a release não foi encontrado no GitHub."
+    detalhe = f" — {recado}" if recado else ""
+    return f"O GitHub respondeu com erro {erro.code}{detalhe}."
+
+
 def consultar(tempo_limite: float = TEMPO_LIMITE_S) -> dict | None:
-    """Pergunta ao GitHub qual é a última versão. ``None`` se não deu."""
+    """Pergunta ao GitHub qual é a última versão. ``None`` se não deu.
+
+    Quando não dá, o porquê fica em :func:`ultimo_motivo` e no registro — sem
+    isso, a tela só sabia dizer "confira a sua internet", que é um palpite.
+    """
+    global _ultimo_motivo
     requisicao = urllib.request.Request(URL_ULTIMA)
     requisicao.add_header("Accept", "application/vnd.github+json")
     requisicao.add_header("X-GitHub-Api-Version", "2022-11-28")
     requisicao.add_header("User-Agent", f"SistemaContabil/{APP_VERSION}")
     try:
         with urllib.request.urlopen(requisicao, timeout=tempo_limite) as resposta:
-            dados = json.loads(resposta.read())
-    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as erro:
-        logging.info("Não foi possível conferir se há versão nova: %s", erro)
+            bruto = resposta.read()
+        dados = json.loads(bruto)
+    except urllib.error.HTTPError as erro:
+        _anotar(_explicar_http(erro))
+        return None
+    except TimeoutError:
+        _anotar(f"O GitHub não respondeu em {tempo_limite:.0f} segundos.")
+        return None
+    except urllib.error.URLError as erro:
+        motivo = getattr(erro, "reason", erro)
+        if isinstance(motivo, TimeoutError) or "timed out" in str(motivo).lower():
+            _anotar(f"O GitHub não respondeu em {tempo_limite:.0f} segundos.")
+        elif "certificate" in str(motivo).lower():
+            _anotar(f"A conexão segura foi recusada: {motivo}")
+        else:
+            _anotar(f"Não cheguei até o GitHub: {motivo}")
+        return None
+    except ValueError:
+        _anotar("O GitHub respondeu algo que não entendi"
+                " — pode ser uma rede que exige login (Wi-Fi de hotel, por exemplo).")
+        return None
+    except OSError as erro:
+        _anotar(f"Falha de rede: {erro}")
         return None
 
+    if not isinstance(dados, dict):
+        _anotar(f"O GitHub respondeu um {type(dados).__name__}, não os dados de uma"
+                " versão.")
+        return None
     versao = str(dados.get("tag_name") or "").lstrip("vV")
     if not versao:
+        recado = str(dados.get("message", "")).strip()
+        _anotar(f"O GitHub respondeu sem versão publicada{f' — {recado}' if recado else ''}"
+                f" (campos: {', '.join(sorted(dados))[:120]}).")
         return None
+    _ultimo_motivo = ""
     arquivo = next((a for a in dados.get("assets", [])
                     if str(a.get("name", "")).lower().endswith(".exe")), None)
     return {
@@ -131,6 +196,7 @@ def verificar(forcar: bool = False) -> dict:
     if dados is None:
         guardado = estado_guardado()
         guardado["falhou"] = True
+        guardado["motivo"] = ultimo_motivo()
         return guardado
 
     banco = _banco()
@@ -172,6 +238,7 @@ def _montar(versao: str, pagina: str, dados: dict | None) -> dict:
         "tamanho": tamanho,
         "publicada_em": banco.get_config("ultima_data_versao", ""),
         "falhou": False,
+        "motivo": "",
         "detalhes": dados,
     }
 
