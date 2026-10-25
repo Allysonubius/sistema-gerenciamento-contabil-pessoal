@@ -33,9 +33,28 @@ def disponivel() -> bool:
     return sys.platform == "win32" and getattr(sys, "frozen", False)
 
 
-def pasta_de_instalacao() -> Path:
+def pasta_padrao() -> Path:
+    """Onde o programa se instala quando o usuário não escolhe outro lugar.
+
+    Dentro do perfil do usuário de propósito: ali não precisa de administrador,
+    e o que é de uma pessoa não aparece para as outras do computador.
+    """
     raiz = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
     return Path(raiz) / "Programs" / APP_SLUG
+
+
+def pasta_de_instalacao() -> Path:
+    """A pasta de fato — a escolhida da última vez, ou a padrão."""
+    from app import db
+
+    escolhida = db.get_config("pasta_instalacao", "")
+    return Path(escolhida) if escolhida else pasta_padrao()
+
+
+def lembrar_pasta(pasta) -> None:
+    from app import db
+
+    db.set_config("pasta_instalacao", str(Path(pasta)) if pasta else "")
 
 
 def caminho_instalado() -> Path:
@@ -163,8 +182,9 @@ def _apagar_da_lista_de_programas() -> None:
         logging.exception("Não foi possível tirar o programa da lista do Windows")
 
 
-def instalar(atalho_na_area_de_trabalho: bool = True, origem=None) -> dict:
-    """Copia o executável para a pasta do usuário e cria os atalhos.
+def instalar(atalho_na_area_de_trabalho: bool = True, origem=None, pasta=None,
+             atalho_no_menu: bool = True, abrir_com_windows: bool | None = None) -> dict:
+    """Copia o executável para a pasta escolhida e cria os atalhos pedidos.
 
     Devolve o que foi feito. Instalar por cima de uma versão já instalada
     apenas troca o arquivo — é assim que a atualização funciona, seja a partir
@@ -180,8 +200,14 @@ def instalar(atalho_na_area_de_trabalho: bool = True, origem=None) -> dict:
     origem = Path(origem).resolve() if origem else executavel_atual()
     if not origem.is_file():
         raise RuntimeError(f"Arquivo não encontrado: {origem}")
+    if pasta:
+        lembrar_pasta(pasta)
     destino = caminho_instalado()
-    destino.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        destino.parent.mkdir(parents=True, exist_ok=True)
+    except OSError as erro:
+        raise RuntimeError(
+            f"Não consegui criar a pasta {destino.parent}:\n{erro}") from erro
 
     if origem != destino:
         antigo = destino.with_suffix(".old")
@@ -192,10 +218,18 @@ def instalar(atalho_na_area_de_trabalho: bool = True, origem=None) -> dict:
         shutil.copy2(origem, destino)
 
     atalhos = {
-        "menu": criar_atalho(pasta_menu_iniciar() / f"{APP_NAME}.lnk", destino),
+        "menu": (criar_atalho(pasta_menu_iniciar() / f"{APP_NAME}.lnk", destino)
+                 if atalho_no_menu else False),
         "area_trabalho": (criar_atalho(pasta_area_trabalho() / f"{APP_NAME}.lnk", destino)
                           if atalho_na_area_de_trabalho else False),
     }
+    if abrir_com_windows is not None:
+        try:
+            from app import inicializacao
+
+            inicializacao.definir(bool(abrir_com_windows))
+        except Exception:  # pragma: no cover - nunca impedir a instalação
+            logging.exception("Falha ao ajustar a abertura com o Windows")
     _registrar_na_lista_de_programas(destino)
     limpar_restos()
     logging.info("Instalado em %s", destino)

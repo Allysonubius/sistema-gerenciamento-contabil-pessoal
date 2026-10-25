@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 572 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 592 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -290,8 +290,14 @@ recebimentos.
 
 ## Instalar no computador
 
-Na primeira vez que o `.exe` baixado é aberto, o programa oferece instalar-se. A
-instalação é **só do usuário** e não pede administrador:
+Na primeira vez que o `.exe` baixado é aberto, o programa oferece instalar-se, numa tela
+que diz exatamente o que vai acontecer: a **pasta de destino** (editável, com botão para
+escolher outra e para voltar à padrão), o tamanho do arquivo, cada **atalho** com o
+caminho completo onde será criado, e se o programa deve abrir junto com o Windows.
+A pasta escolhida fica lembrada para as próximas atualizações.
+
+A tela avisa enquanto você digita se a pasta já existe, se será criada, ou se é lugar
+que exige administrador. A instalação é **só do usuário** e não pede administrador:
 
 - copia o executável para `%LOCALAPPDATA%\Programs\SistemaContabil`;
 - cria atalho no menu Iniciar e na área de trabalho;
@@ -357,6 +363,13 @@ um executável pela metade.
 Mesmo sem novidade o botão continua servindo, para relembrar o que mudou na versão que
 está rodando.
 
+### Depois de atualizar
+
+Na primeira abertura de uma versão nova, o programa mostra **o que mudou** numa janela,
+sem ser preciso ir procurar. Aparece uma vez só, nunca na primeira abertura da vida —
+ali não houve atualização nenhuma, e encher a tela de novidade antes de a pessoa ter
+usado o programa seria começar pelo fim.
+
 O programa **não se atualiza sozinho** — e isso é escolha, não falta: saber que a versão
 mudou vale mais do que descobrir depois que alguma coisa já está diferente na tela. Quem
 clica é sempre o usuário.
@@ -403,12 +416,15 @@ qualquer momento, e o fecho anda um mês para trás por vez. O estado mora em
 ### O programa é quem lembra
 
 O fechamento só vale se acontecer, e deixar para quando lembrar é o mesmo que não ter.
-Por isso, havendo mês encerrado e ainda aberto, uma **faixa no alto da janela** diz qual
-é e quantos registros continuam alteráveis. Ela traz três saídas: *Fechar agora*, que leva
-direto a Ajustes; *Depois*, que cala o aviso por sete dias; e *Não avisar mais*, que
-desliga de vez — com interruptor para religar em Ajustes.
+Por isso, havendo mês encerrado e ainda aberto, o programa abre uma **janela** — não
+uma tarja, que é fácil demais de não ver. Ela diz qual mês é e quantos registros
+continuam alteráveis, e fecha ali mesmo: *Fechar <mês>*, *Fechar os N meses* quando há
+mais de um, *Depois* (cala por sete dias) e *Não avisar mais*, com interruptor para
+religar em Ajustes.
 
-O aviso volta sozinho a cada abertura e a cada virada de dia, até o mês ser fechado.
+A regra é estrita: **só aparece quando o mês seguinte começa**. Lançar hoje nunca faz o
+programa pedir para fechar o mês de hoje, e quem está em dia não é incomodado — fechado
+até setembro, outubro só é cobrado quando novembro chegar.
 
 ### Categorias que nunca foram usadas
 

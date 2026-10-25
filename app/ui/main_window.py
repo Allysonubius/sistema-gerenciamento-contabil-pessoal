@@ -93,6 +93,7 @@ class Aplicacao(tk.Tk):
         self.mostrar(INICIO)
         self._cuidar_da_instalacao()
         self._vigiar_versao_nova()
+        self._conferir_notas_da_atualizacao()
         self.conferir_fechamento()
         self._vigiar_segunda_abertura()
         self._vigiar_backup()
@@ -221,12 +222,6 @@ class Aplicacao(tk.Tk):
     def _montar_layout(self) -> None:
         # Faixas do alto: nascem escondidas e só ocupam espaço quando há o que
         # dizer. A do fechamento vem por cima, porque fala dos seus números.
-        self.faixa_fechamento = FaixaAviso(self, CORES["primaria"], "#ffffff")
-        self.faixa_fechamento.acoes([
-            ("Depois", self._adiar_fechamento),
-            ("Não avisar mais", self._desligar_lembrete_fechamento),
-            ("Fechar agora", self.abrir_fechamento),
-        ])
         self.faixa_novidade = FaixaAviso(self, CORES["alerta"])
         self.faixa_novidade.acoes([
             ("Dispensar", self.faixa_novidade.esconder),
@@ -450,39 +445,58 @@ class Aplicacao(tk.Tk):
         """Lembra, no mês seguinte, que o anterior ficou por fechar.
 
         O fechamento só vale se acontecer. Deixar para quando lembrar é o mesmo
-        que não ter, então quem lembra é o programa — e volta a lembrar, até o
-        mês ser fechado ou o usuário dizer que não quer mais.
+        que não ter, então quem lembra é o programa — e lembra numa janela, não
+        numa tarja: tarja no alto da tela é fácil demais de não ver.
         """
         from app import services
 
         if self._encerrando or not services.deve_lembrar_fechamento():
-            self.faixa_fechamento.esconder()
             return
-        lembrete = services.lembrete_de_fechamento()
-        resto = (f" e outros {lembrete['quantos'] - 1} mês(es)"
-                 if lembrete["quantos"] > 1 else "")
-        self.faixa_fechamento.mostrar(
-            f"{lembrete['nome'].capitalize()}{resto} já terminou e continua aberto:"
-            f" {lembrete['lancamentos']} registro(s) ainda podem ser alterados.",
-            acima_de=self.corpo)
+        self.after(600, self._abrir_aviso_de_fechamento)
 
-    def abrir_fechamento(self) -> None:
-        self.faixa_fechamento.esconder()
-        self.mostrar(AJUSTES)
-
-    def _adiar_fechamento(self) -> None:
+    def _abrir_aviso_de_fechamento(self) -> None:
         from app import services
 
-        volta = services.adiar_lembrete()
-        self.faixa_fechamento.esconder()
-        self.notificar(f"Tudo bem — volto a lembrar em {services.para_br(volta)}.")
+        if self._encerrando or not services.deve_lembrar_fechamento():
+            return
+        from app.ui.avisos import DialogoFechamento
 
-    def _desligar_lembrete_fechamento(self) -> None:
-        from app import services
+        DialogoFechamento(self, self._depois_do_fechamento)
 
-        services.definir_lembrete(False)
-        self.faixa_fechamento.esconder()
-        self.notificar("Não aviso mais sobre fechamento. Dá para religar em Ajustes.")
+    def _depois_do_fechamento(self, recado: str) -> None:
+        self.notificar(recado)
+        self.recarregar_tela_atual()
+
+    def _conferir_notas_da_atualizacao(self) -> None:
+        """Acabou de atualizar? Conta o que veio junto.
+
+        Em linha separada porque pode precisar da rede, e marcando a versão
+        como vista antes de abrir a janela: se a busca falhar, o aviso não fica
+        voltando a cada abertura.
+        """
+        from app import atualizacao
+
+        if not atualizacao.versao_mudou():
+            atualizacao.marcar_versao_vista()
+            return
+        anterior = atualizacao.versao_anterior()
+        atualizacao.marcar_versao_vista()
+
+        import threading
+
+        def buscar() -> None:
+            notas = atualizacao.notas_desta_versao()
+            if notas:
+                self.after(0, self._mostrar_notas, notas, anterior)
+
+        threading.Thread(target=buscar, daemon=True, name="notas-versao").start()
+
+    def _mostrar_notas(self, notas: str, anterior: str) -> None:
+        if self._encerrando:
+            return
+        from app.ui.avisos import DialogoNotasAtualizacao
+
+        DialogoNotasAtualizacao(self, notas, anterior)
 
     def abrir_versao_nova(self) -> None:
         """Conta a novidade aqui dentro — ninguém precisa abrir navegador."""
@@ -509,40 +523,23 @@ class Aplicacao(tk.Tk):
 
         if self._encerrando or not instalacao.deve_oferecer_instalacao():
             return
-        resposta = messagebox.askyesno(
-            "Instalar no computador",
-            "Você está rodando o programa direto do arquivo baixado.\n\n"
-            "Posso instalá-lo neste computador? Ele passa a ter atalho no menu"
-            " Iniciar e na área de trabalho, aparece na lista de aplicativos do"
-            " Windows e deixa de depender de onde o arquivo está guardado.\n\n"
-            "Não precisa de administrador, e os seus dados não mudam de lugar.",
-            parent=self)
-        if not resposta:
-            instalacao.recusar_convite()
-            return
-        self.instalar_no_computador()
+        self.instalar_no_computador(convite=True)
 
-    def instalar_no_computador(self) -> None:
-        """Copia o programa para a pasta do usuário e reabre a partir dela."""
+    def instalar_no_computador(self, convite: bool = False, origem=None) -> None:
+        """Abre a tela de instalação, com pasta e atalhos à escolha."""
         from app import instalacao
+        from app.ui.instalador import DialogoInstalar
 
-        try:
-            resultado = instalacao.instalar()
-        except (RuntimeError, OSError) as erro:
-            messagebox.showwarning("Não foi possível instalar", str(erro), parent=self)
-            return
+        dialogo = DialogoInstalar(self, origem=origem, ao_instalar=self._apos_instalar)
+        self.wait_window(dialogo)
+        if dialogo.instalado is None and convite:
+            # Recusou o convite: não insiste nas próximas aberturas.
+            instalacao.recusar_convite()
 
-        destino = resultado["caminho"]
-        atalhos = resultado["atalhos"]
-        feitos = [nome for nome, ok in (("no menu Iniciar", atalhos["menu"]),
-                                        ("na área de trabalho", atalhos["area_trabalho"]))
-                  if ok]
-        recado = ("Atalho criado " + " e ".join(feitos) + "." if feitos else
-                  "Não consegui criar os atalhos — o programa está instalado do mesmo"
-                  " jeito e aparece na lista de aplicativos do Windows.")
+    def _apos_instalar(self, destino, atalhos: str) -> None:
         if not messagebox.askyesno(
                 "Pronto",
-                f"Instalado em:\n{destino}\n\n{recado}\n\n"
+                f"Instalado em:\n{destino}\n\n{atalhos}\n\n"
                 "Quer que eu feche esta janela e abra a cópia instalada agora?",
                 parent=self):
             self.notificar("Programa instalado neste computador.")

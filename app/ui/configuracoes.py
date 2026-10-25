@@ -384,6 +384,15 @@ class Configuracoes(ttk.Frame):
         self.app.instalar_no_computador()
         self.recarregar()
 
+    def mostrar_fechamento_pendente(self) -> None:
+        from app.ui.avisos import DialogoFechamento
+
+        DialogoFechamento(self, self._apos_fechamento)
+
+    def _apos_fechamento(self, recado: str) -> None:
+        self.app.notificar(recado)
+        self.recarregar()
+
     def alternar_aviso_versao(self) -> None:
         atualizacao.definir_verificacao(bool(self.var_avisar_versao.get()))
         self.app.notificar("Aviso de versão nova "

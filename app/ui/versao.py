@@ -174,6 +174,8 @@ class JanelaNovaVersao(tk.Toplevel):
         except (RuntimeError, OSError) as erro:
             self._falhou(f"Baixou, mas não consegui instalar: {erro}")
             return
+        # Atualizar é trocar o arquivo no lugar que já era dele: a pasta e os
+        # atalhos ficam como estão, sem perguntar de novo o que já foi dito.
         if not messagebox.askyesno(
                 "Pronto",
                 f"Versão {self.estado['disponivel']} instalada.\n\n"

@@ -176,6 +176,62 @@ def _montar(versao: str, pagina: str, dados: dict | None) -> dict:
     }
 
 
+def notas_desta_versao() -> str:
+    """O que mudou na versão que está rodando agora.
+
+    Serve para o aviso que aparece depois de atualizar. Se a última consulta já
+    trouxe exatamente esta versão, a resposta está guardada; se não, pergunta
+    pela tag correspondente.
+    """
+    banco = _banco()
+    if banco.get_config("ultima_versao_vista", "") == APP_VERSION:
+        guardadas = banco.get_config("ultima_nota_versao", "")
+        if guardadas:
+            return guardadas
+    dados = consultar_tag(f"v{APP_VERSION}")
+    if dados:
+        banco.set_config("notas_versao_atual", dados["notas"])
+        return dados["notas"]
+    return banco.get_config("notas_versao_atual", "")
+
+
+def consultar_tag(tag: str) -> dict | None:
+    """As informações de uma release específica."""
+    url = f"https://api.github.com/repos/{REPOSITORIO}/releases/tags/{tag}"
+    requisicao = urllib.request.Request(url)
+    requisicao.add_header("Accept", "application/vnd.github+json")
+    requisicao.add_header("User-Agent", f"SistemaContabil/{APP_VERSION}")
+    try:
+        with urllib.request.urlopen(requisicao, timeout=TEMPO_LIMITE_S) as resposta:
+            dados = json.loads(resposta.read())
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError) as erro:
+        logging.info("Não consegui buscar as notas de %s: %s", tag, erro)
+        return None
+    return {"versao": str(dados.get("tag_name") or "").lstrip("vV"),
+            "notas": dados.get("body") or "",
+            "publicada_em": dados.get("published_at", "")}
+
+
+def versao_mudou() -> bool:
+    """O programa foi atualizado desde a última vez que abriu?
+
+    Primeira abertura da vida não conta: ali não houve atualização nenhuma, e
+    encher a tela de novidade antes de o usuário ter usado o programa seria
+    começar pelo fim.
+    """
+    banco = _banco()
+    anterior = banco.get_config("versao_anterior", "")
+    return bool(anterior) and anterior != APP_VERSION
+
+
+def marcar_versao_vista() -> None:
+    _banco().set_config("versao_anterior", APP_VERSION)
+
+
+def versao_anterior() -> str:
+    return _banco().get_config("versao_anterior", "")
+
+
 def ignorar(versao: str) -> None:
     """'Não quero ser avisado desta versão' — a próxima volta a avisar."""
     _banco().set_config("versao_ignorada", (versao or "").strip())
