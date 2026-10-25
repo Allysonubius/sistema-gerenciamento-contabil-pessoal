@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import sys
 import traceback
+from datetime import datetime
 
 from app import db, inicializacao, instalacao, instancia
 from app.config import APP_NAME, LOG_PATH, ensure_dirs
@@ -31,29 +32,56 @@ def _tratar_excecao(tipo, valor, tb) -> None:
 
 
 def _avisar_banco_danificado(erro) -> int:
-    """O arquivo de dados não abre: diz isso na cara, com a saída à mão.
+    """O arquivo de dados não abre: diz isso na cara, e oferece o conserto.
 
-    Morrer em silêncio aqui é o pior dos mundos — o programa simplesmente não
-    aparecia, e quem estava do outro lado não tinha como saber por quê nem que
-    havia cópia de ontem esperando.
+    Mandar a pessoa renomear arquivos no Explorador, justo quando ela acabou de
+    levar um susto, é pedir para o estrago virar dois. O programa sabe onde
+    estão as cópias e sabe qual delas está inteira: ele faz a troca.
     """
     from tkinter import messagebox
 
     logging.error("Banco danificado: %s", erro.motivo)
-    copias = erro.copias[:3]
-    lista = "\n".join(f"  · {c.name}" for c in copias) or "  (nenhuma encontrada)"
-    messagebox.showerror(
+    copias = [c for c in erro.copias if not c.name.startswith("contabil_DANIFICADO")]
+    if not copias:
+        messagebox.showerror(
+            APP_NAME,
+            "O arquivo dos seus dados está danificado e não há nenhuma cópia de"
+            f" segurança para voltar.\n\nDetalhe técnico: {erro.motivo}\n\n"
+            f"O que houve ficou registrado em:\n{LOG_PATH}")
+        return 1
+
+    mais_nova = copias[0]
+    quando = datetime.fromtimestamp(mais_nova.stat().st_mtime)
+    if not messagebox.askyesno(
+            APP_NAME,
+            "O arquivo dos seus dados está danificado e não consegui consertá-lo.\n\n"
+            "Mas os seus registros não se perderam: a cópia de segurança mais recente"
+            f" é de {quando:%d/%m/%Y às %H:%M}.\n\n"
+            "Quer que eu volte para ela agora?\n\n"
+            "O arquivo danificado fica guardado ao lado das cópias, intacto, caso ainda"
+            " dê para aproveitar alguma coisa dele."):
+        messagebox.showinfo(
+            APP_NAME,
+            f"Tudo bem. As cópias estão em:\n{mais_nova.parent}\n\n"
+            "Para voltar à mão, renomeie a escolhida para 'contabil.db' e coloque-a em:"
+            f"\n{LOG_PATH.parent}\n\nO que houve ficou registrado em:\n{LOG_PATH}")
+        return 1
+
+    try:
+        db.restaurar_copia(mais_nova)
+    except Exception as falha:
+        logging.exception("Falha ao restaurar a cópia")
+        messagebox.showerror(
+            APP_NAME,
+            f"Não consegui voltar para a cópia:\n\n{falha}\n\n"
+            f"As cópias continuam intactas em:\n{mais_nova.parent}")
+        return 1
+
+    messagebox.showinfo(
         APP_NAME,
-        "O arquivo dos seus dados está danificado e não consegui consertá-lo.\n\n"
-        f"Detalhe técnico: {erro.motivo}\n\n"
-        "Os seus registros não se perderam: há cópias de segurança guardadas.\n"
-        f"As mais recentes são:\n{lista}\n\n"
-        "Elas ficam em:\n"
-        f"{(copias[0].parent if copias else LOG_PATH.parent / 'backups')}\n\n"
-        "Para voltar, renomeie a cópia mais recente para 'contabil.db' e coloque-a em:\n"
-        f"{LOG_PATH.parent}\n\n"
-        f"O que houve ficou registrado em:\n{LOG_PATH}")
-    return 1
+        f"Pronto — os seus dados voltaram à cópia de {quando:%d/%m/%Y às %H:%M}.\n\n"
+        "O programa vai abrir normalmente agora.")
+    return 0
 
 
 def _desinstalar() -> int:
@@ -100,7 +128,9 @@ def main() -> int:
     try:
         db.get_connection()
     except db.BancoDanificadoError as erro:
-        return _avisar_banco_danificado(erro)
+        if _avisar_banco_danificado(erro) != 0:
+            return 1
+        db.get_connection()          # agora abre: a cópia boa está no lugar
     # Se o programa mudou de pasta, a entrada de inicialização é reapontada.
     try:
         inicializacao.sincronizar()

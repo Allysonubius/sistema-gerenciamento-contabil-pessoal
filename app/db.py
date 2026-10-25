@@ -429,6 +429,42 @@ def _curar_indices(conexao: sqlite3.Connection) -> list[str]:
     return orfaos
 
 
+def restaurar_copia(origem: Path) -> Path:
+    """Põe uma cópia de segurança no lugar do banco, guardando o que havia ali.
+
+    Existe para o momento em que o banco não abre: mandar a pessoa renomear
+    arquivos no Explorador, justo quando ela acabou de levar um susto, é pedir
+    para o estrago virar dois.
+    """
+    origem = Path(origem)
+    if not origem.is_file():
+        raise FileNotFoundError(f"Cópia não encontrada: {origem}")
+    conferir = sqlite3.connect(f"file:{origem}?mode=ro", uri=True)
+    try:
+        estado = conferir.execute("PRAGMA integrity_check").fetchone()[0]
+    finally:
+        conferir.close()
+    if estado != "ok":
+        raise sqlite3.DatabaseError(f"A cópia {origem.name} também está danificada.")
+
+    fechar()
+    ensure_dirs()
+    if DB_PATH.exists():
+        carimbo = datetime.now().strftime("%Y%m%d_%H%M%S")
+        guardado = BACKUP_DIR / f"contabil_DANIFICADO_{carimbo}.db"
+        shutil.copy2(DB_PATH, guardado)
+        logging.warning("Banco danificado guardado em %s", guardado)
+    for sufixo in ("-wal", "-shm"):
+        resto = DB_PATH.with_name(DB_PATH.name + sufixo)
+        try:
+            resto.unlink(missing_ok=True)
+        except OSError:
+            pass
+    shutil.copy2(origem, DB_PATH)
+    logging.info("Banco restaurado a partir de %s", origem)
+    return DB_PATH
+
+
 def copias_disponiveis() -> list[Path]:
     """As cópias de segurança, da mais recente para a mais antiga."""
     if not BACKUP_DIR.is_dir():
@@ -443,7 +479,13 @@ def _abrir_arquivo() -> sqlite3.Connection:
     conexao.create_function("sem_acento", 1, _sem_acento, deterministic=True)
     conexao.execute("PRAGMA foreign_keys = ON")
     conexao.execute("PRAGMA journal_mode = WAL")
-    conexao.execute("PRAGMA synchronous = NORMAL")
+    # FULL, e não NORMAL: com NORMAL o SQLite não espera o disco confirmar a
+    # gravação, e um processo morto no meio de um checkpoint deixa o cabeçalho
+    # dizendo que o banco tem mais páginas do que o arquivo realmente tem — o
+    # banco inteiro deixa de abrir. Aconteceu duas vezes aqui. Os poucos
+    # milissegundos a mais por gravação não se percebem num programa pessoal;
+    # perder o arquivo, sim.
+    conexao.execute("PRAGMA synchronous = FULL")
     return conexao
 
 
@@ -880,7 +922,7 @@ def _assinatura_do_arquivo(caminho: Path) -> str | None:
         return None
 
 
-def backup_automatico() -> Path | None:
+def backup_automatico(forcar: bool = False) -> Path | None:
     """Uma cópia por dia, e só quando algo realmente mudou.
 
     Evita encher a pasta: o arquivo do dia é sobrescrito e o histórico é
@@ -888,7 +930,9 @@ def backup_automatico() -> Path | None:
     """
     ensure_dirs()
     destino = BACKUP_DIR / f"contabil_{datetime.now():%Y%m%d}.db"
-    if destino.exists() and _assinatura_do_arquivo(destino) == assinatura_dados():
+    if forcar:
+        destino = BACKUP_DIR / f"contabil_{datetime.now():%Y%m%d_%H%M%S}.db"
+    elif destino.exists() and _assinatura_do_arquivo(destino) == assinatura_dados():
         return None
     caminho = fazer_backup(destino)
     rotacionar_backups()
@@ -1072,9 +1116,24 @@ def reparar_indices() -> str | None:
 
 
 def fechar() -> None:
+    """Fecha a conexão deixando o arquivo inteiro, sem WAL pendurado.
+
+    O checkpoint explícito antes do close é o que garante que tudo o que estava
+    no WAL já esteja no banco. Sem ele, o trabalho ficava para o fechamento
+    automático do SQLite — justamente o momento em que o processo pode morrer.
+    """
     global _conn
     with _lock:
-        if _conn is not None:
+        if _conn is None:
+            return
+        try:
             _conn.commit()
-            _conn.close()
+            _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
+        except sqlite3.Error:
+            logging.exception("Falha ao consolidar o banco antes de fechar")
+        finally:
+            try:
+                _conn.close()
+            except sqlite3.Error:
+                logging.exception("Falha ao fechar o banco")
             _conn = None

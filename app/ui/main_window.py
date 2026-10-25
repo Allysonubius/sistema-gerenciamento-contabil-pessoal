@@ -610,8 +610,11 @@ class Aplicacao(tk.Tk):
 
         self._encerrando = True
         try:
-            if db.get_config("backup_ao_sair") == "1":
-                db.backup_automatico()
+            # Cópia forçada, não a do dia: trocar o executável é o momento mais
+            # arriscado da vida do programa, e foi exatamente aí que o arquivo
+            # se danificou duas vezes. Uma cópia de minutos atrás vale muito
+            # mais do que uma de ontem.
+            db.backup_automatico(forcar=True)
         except Exception:
             logging.exception("Falha ao salvar a cópia antes de trocar de executável")
         try:

@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 630 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 643 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -606,7 +606,23 @@ sistemacontabil/
 `conta.dia_fechamento` / `dia_vencimento` / `juros_rotativo`, o ciclo do cartão;
 `titulo.multa_pct` / `juros_mes_pct` / `encargos_lancados` / `encargos_ate`, os encargos de
 atraso; `titulo.juros_embutido`, a parte de juros de cada parcela de empréstimo.
-Chaves estrangeiras ativas, modo WAL e versionamento por `PRAGMA user_version`.
+Chaves estrangeiras ativas, modo WAL com `synchronous = FULL` e versionamento por
+`PRAGMA user_version`.
+
+O `FULL` é deliberado. Com `NORMAL`, o SQLite não espera o disco confirmar a gravação,
+e um processo encerrado no meio de um *checkpoint* do WAL deixa o cabeçalho dizendo que
+o banco tem mais páginas do que o arquivo realmente tem — e o banco inteiro deixa de
+abrir. Aconteceu duas vezes durante o desenvolvimento. Os poucos milissegundos a mais
+por gravação não se percebem num programa pessoal; perder o arquivo, sim.
+
+Fechar o banco faz um `wal_checkpoint(TRUNCATE)` explícito antes do `close`, para não
+deixar esse trabalho justamente para o instante em que o processo pode morrer. E antes
+de trocar o executável numa atualização — o momento mais arriscado da vida do programa
+— sai uma cópia forçada, não a do dia.
+
+Se mesmo assim o arquivo não abrir, o programa **oferece voltar para a cópia mais recente
+com um clique**, guardando o arquivo danificado ao lado. Mandar alguém renomear arquivos
+no Explorador logo depois de um susto é pedir para o estrago virar dois.
 A coluna `lancamento.origem` distingue o que foi digitado (`MANUAL`) do que nasceu de
 uma baixa de título (`BAIXA`) — é ela que sustenta a regra de alteração acima.
 `titulo.pagamento_automatico` marca as contas em débito automático, baixadas sozinhas no
