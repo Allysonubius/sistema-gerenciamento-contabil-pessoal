@@ -74,6 +74,17 @@ TOPICOS: list[tuple[str, str]] = [
      "Quando pagar ou receber de fato, selecione a conta e clique em\n"
      "'Marcar como pago/recebido'. O gasto ou a entrada é registrado automaticamente."),
 
+    ("Mudar a data de uma conta",
+     "Não pagou no dia, ou o desconto não aconteceu? A conta não some — ela passa a\n"
+     "vencer noutro dia.\n\n"
+     "Em 'Contas a Pagar', escolha a linha e clique em 'Mudar a data'. A janela mostra\n"
+     "há quantos dias a conta venceu e traz atalhos: hoje, daqui a 7 dias, daqui a 15,\n"
+     "mesmo dia do mês que vem.\n\n"
+     "Se for conta fixa, marque 'valer também para os próximos meses' e ela passa a\n"
+     "vencer nesse dia todo mês. Os meses já pagos nunca são tocados.\n\n"
+     "O mês de referência não muda: a conta de outubro paga em novembro continua\n"
+     "sendo a conta de outubro."),
+
     ("Contas fixas (todo mês a mesma coisa)",
      "Aluguel, luz, internet, mensalidade: cadastre uma vez e o sistema lança os\n"
      "próximos 12 meses sozinho.\n\n"

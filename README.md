@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 592 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 622 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -393,6 +393,20 @@ O medidor compara três coisas:
 O cartão *Poupança deste mês*, no painel, fica verde quando a meta foi batida, amarelo
 quando faltou e vermelho quando nada foi guardado, e diz quanto falta. A janela traz
 ainda os últimos seis meses, para ver se o hábito se sustenta.
+
+## Mudar a data de uma conta
+
+A conta que não foi paga no dia não deixa de existir: ela passa a vencer noutro dia. Em
+**Contas a Pagar**, o botão *Mudar a data* abre uma janela com o vencimento atual, há
+quantos dias ele passou, e atalhos para as datas que se escolheria de qualquer jeito —
+hoje, daqui a 7 dias, daqui a 15, mesmo dia do mês que vem.
+
+Sendo conta fixa, dá para marcar **"valer também para os próximos meses"**: a conta passa
+a vencer nesse dia todo mês e os meses à frente que ainda estão em aberto acompanham.
+Mês já pago nunca é tocado — ele é história, e história não se remarca.
+
+A competência **não** muda junto: a conta de outubro paga em novembro continua sendo a
+conta de outubro. Dia 31 em mês que não tem 31 cai no último dia que existe.
 
 ## Fechamento de competência
 

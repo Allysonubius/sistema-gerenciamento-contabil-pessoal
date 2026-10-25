@@ -287,3 +287,64 @@ def test_abrir_porta_atende_quem_clicou_de_novo(senha_ui, raiz_tk):
     finally:
         senha_ui.INTERVALO_SEGUNDA_ABERTURA_MS = monitorado
         raiz_tk.deiconify()
+
+
+# --------------------------------------------------------------------------- #
+# Uma porta só
+# --------------------------------------------------------------------------- #
+def test_pedir_a_senha_de_novo_nao_abre_outra_janela(sistema, tela_limpa, raiz_tk):
+    """Clicar no ícone outra vez empilhava diálogos, um por cima do outro."""
+    import importlib
+
+    from app.ui import main_window
+
+    seguranca.definir_senha("segredo123", "segredo123")
+    senha_ui = importlib.reload(importlib.import_module("app.ui.senha"))
+
+    class JanelaFalsa:
+        _abrir_a_porta = main_window.Aplicacao._abrir_a_porta
+        _guardar_janela_senha = main_window.Aplicacao._guardar_janela_senha
+
+        def __init__(self):
+            self._pedindo_senha = True       # como se já estivesse pedindo
+            self._porta_aberta = False
+            self._janela_senha = senha_ui.DialogoEntrar(raiz_tk)
+            self._janela_senha.grab_release()
+
+    janela = JanelaFalsa()
+    abertas_antes = len([f for f in raiz_tk.winfo_children()
+                         if isinstance(f, senha_ui.DialogoEntrar)])
+    try:
+        assert janela._abrir_a_porta() is False
+        abertas_depois = len([f for f in raiz_tk.winfo_children()
+                              if isinstance(f, senha_ui.DialogoEntrar)])
+        assert abertas_depois == abertas_antes == 1
+    finally:
+        janela._janela_senha.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_restaurar_com_a_senha_na_tela_so_traz_para_a_frente(sistema, tela_limpa,
+                                                             raiz_tk):
+    from app.ui import main_window
+
+    chamadas = []
+
+    class JanelaFalsa:
+        restaurar_da_bandeja = main_window.Aplicacao.restaurar_da_bandeja
+        _pedindo_senha = True
+        _porta_aberta = False
+        _janela_senha = None
+
+        def _abrir_a_porta(self):
+            chamadas.append("porta")
+            return False
+
+        def recarregar_tela_atual(self):
+            chamadas.append("recarregou")
+
+    JanelaFalsa().restaurar_da_bandeja()
+
+    # Só trouxe a porta para a frente: não recarregou nada atrás dela.
+    assert chamadas == ["porta"]

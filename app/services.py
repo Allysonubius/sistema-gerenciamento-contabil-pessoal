@@ -2485,6 +2485,86 @@ def obter_titulo(titulo_id: int) -> db.sqlite3.Row | None:
     return db.query_one("SELECT * FROM titulo WHERE id = ?", (titulo_id,))
 
 
+# --------------------------------------------------------------------------- #
+# Remarcar o vencimento
+# --------------------------------------------------------------------------- #
+# A conta que não foi paga no dia não deixa de existir: ela passa a vencer
+# noutro dia. Antes só dava para corrigir o título inteiro, campo por campo, e
+# a conta fixa continuava cobrando o dia antigo nos meses seguintes.
+def remarcar_titulo(titulo_id: int, novo_vencimento: str,
+                    seguintes: bool = False) -> dict:
+    """Muda a data em que a conta vence. Devolve o que mudou.
+
+    Com ``seguintes``, a conta fixa passa a vencer nesse dia de todo mês, e os
+    meses à frente que ainda estão em aberto acompanham. Mês já pago nunca é
+    tocado: ele é história, e história não se remarca.
+    """
+    titulo = obter_titulo(titulo_id)
+    if titulo is None:
+        raise RegraNegocioError("Conta não encontrada.")
+    if titulo["status"] != "ABERTO":
+        raise RegraNegocioError(
+            "Esta conta já foi paga ou cancelada — remarcar não faria sentido."
+            " Desfaça o pagamento antes, se for o caso.")
+    _validar_data(novo_vencimento)
+    _garantir_periodo_aberto(titulo["vencimento"], "remarcado")
+    _garantir_periodo_aberto(novo_vencimento, "movido para esta data")
+
+    anterior = titulo["vencimento"]
+    if novo_vencimento == anterior and not seguintes:
+        return {"titulo": 0, "seguintes": 0, "de": anterior, "para": novo_vencimento,
+                "dia": int(novo_vencimento[8:])}
+
+    db.execute("UPDATE titulo SET vencimento = ? WHERE id = ?",
+               (novo_vencimento, titulo_id))
+
+    adiante = 0
+    dia = int(novo_vencimento[8:10])
+    if seguintes and titulo["recorrencia_id"]:
+        # O mês deste título já foi acertado acima; daqui para a frente é a
+        # conta fixa que passa a nascer no dia novo.
+        base = _mes_seguinte(titulo["competencia"] or novo_vencimento[:7])
+        adiante = ajustar_dia_recorrencia(titulo["recorrencia_id"], dia, base)
+    return {"titulo": 1, "seguintes": adiante, "de": anterior,
+            "para": novo_vencimento, "dia": dia}
+
+
+def sugestoes_de_remarcacao(titulo_id: int) -> list[dict]:
+    """Datas prontas para um clique: as que a pessoa escolheria de qualquer jeito."""
+    titulo = obter_titulo(titulo_id)
+    if titulo is None:
+        return []
+    base = date.fromisoformat(max(titulo["vencimento"], hoje_iso()))
+    atual = date.fromisoformat(titulo["vencimento"])
+    opcoes = [
+        ("Hoje", date.fromisoformat(hoje_iso())),
+        ("Daqui a 7 dias", base + timedelta(days=7)),
+        ("Daqui a 15 dias", base + timedelta(days=15)),
+        ("Mesmo dia do mês que vem", somar_meses(atual, 1)),
+    ]
+    vistas, saida = set(), []
+    for rotulo, quando in opcoes:
+        iso = quando.isoformat()
+        if iso in vistas or iso < hoje_iso():
+            continue
+        vistas.add(iso)
+        saida.append({"rotulo": rotulo, "data": iso})
+    return saida
+
+
+def pode_remarcar(titulo_id: int) -> tuple[bool, str]:
+    """Dá para remarcar esta conta? E, se não dá, por quê."""
+    titulo = obter_titulo(titulo_id)
+    if titulo is None:
+        return False, "Conta não encontrada."
+    if titulo["status"] != "ABERTO":
+        return False, "Só contas em aberto podem ser remarcadas."
+    if periodo_fechado(titulo["vencimento"]):
+        return False, (f"{mes_nome(titulo['vencimento'][:7]).capitalize()} está fechado:"
+                       " reabra a competência em Ajustes para mexer nesta conta.")
+    return True, ""
+
+
 def titulos_com_encargos(**filtros) -> list[dict]:
     """Títulos com multa e juros calculados até hoje (o lançado e o estimado).
 

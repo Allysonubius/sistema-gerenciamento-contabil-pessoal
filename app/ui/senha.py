@@ -286,7 +286,7 @@ class DialogoEsqueci(tk.Toplevel):
 INTERVALO_SEGUNDA_ABERTURA_MS = 800
 
 
-def abrir_porta(janela: tk.Misc, ao_pedirem_de_novo=None) -> bool:
+def abrir_porta(janela: tk.Misc, ao_pedirem_de_novo=None, ao_abrir=None) -> bool:
     """Deixa entrar? Cria a senha no primeiro uso e a pede nos demais.
 
     ``janela`` é a aplicação, ainda retraída: nenhum número aparece antes de a
@@ -295,6 +295,8 @@ def abrir_porta(janela: tk.Misc, ao_pedirem_de_novo=None) -> bool:
     """
     dialogo = (DialogoCriarSenha(janela) if not seguranca.tem_senha()
                else DialogoEntrar(janela))
+    if ao_abrir is not None:
+        ao_abrir(dialogo)
 
     if ao_pedirem_de_novo is not None:
         def vigiar() -> None:

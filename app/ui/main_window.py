@@ -62,6 +62,10 @@ class Aplicacao(tk.Tk):
         # chamada: pedi-la a cada boot, numa janela que nem vai aparecer, só
         # ensinaria o usuário a desligar uma das duas coisas.
         self._porta_aberta = False
+        # Uma porta só: pedir senha de novo por cima de uma janela que já está
+        # pedindo empilha diálogos e deixa o usuário digitando no lugar errado.
+        self._pedindo_senha = False
+        self._janela_senha = None
         self.liberado = True
         if not iniciar_minimizado:
             self.liberado = self._abrir_a_porta()
@@ -297,14 +301,34 @@ class Aplicacao(tk.Tk):
                  font=(theme.FONTE, 8), anchor="w", padx=8).pack(fill="x", pady=(4, 0))
 
     def _abrir_a_porta(self) -> bool:
-        """Pede (ou cria) a senha. False quando o usuário desistiu de entrar."""
+        """Pede (ou cria) a senha. False quando o usuário desistiu de entrar.
+
+        Chamada de novo enquanto a janela já está aberta — segundo clique no
+        ícone, restaurar da bandeja, o vigia da segunda abertura — ela apenas
+        traz a janela existente para a frente. Empilhar diálogos de senha é o
+        tipo de coisa que faz a pessoa digitar no lugar errado.
+        """
         if modo_demonstracao():
             self._porta_aberta = True
             return True
+        if self._pedindo_senha:
+            if self._janela_senha is not None and self._janela_senha.winfo_exists():
+                self._janela_senha.chamar_a_atencao()
+            return self._porta_aberta
+
         from app.ui.senha import abrir_porta
 
-        self._porta_aberta = abrir_porta(self, self._atender_segunda_abertura)
+        self._pedindo_senha = True
+        try:
+            self._porta_aberta = abrir_porta(self, self._atender_segunda_abertura,
+                                             ao_abrir=self._guardar_janela_senha)
+        finally:
+            self._pedindo_senha = False
+            self._janela_senha = None
         return self._porta_aberta
+
+    def _guardar_janela_senha(self, dialogo) -> None:
+        self._janela_senha = dialogo
 
     def _atender_segunda_abertura(self, dialogo) -> None:
         """Clicou no ícone de novo enquanto a senha estava sendo pedida.
@@ -640,7 +664,11 @@ class Aplicacao(tk.Tk):
         self.bandeja.notificar("O sistema continua aberto aqui, perto do relógio.")
 
     def restaurar_da_bandeja(self) -> None:
-        # Quem abriu junto com o Windows ainda não passou pela senha.
+        # Quem abriu junto com o Windows ainda não passou pela senha. Se a
+        # janela da senha já está aberta, ela volta para a frente e é só.
+        if self._pedindo_senha:
+            self._abrir_a_porta()
+            return
         if not self._porta_aberta and not self._abrir_a_porta():
             return
         # Voltar da bandeja refaz as contas da tela: o programa costuma passar

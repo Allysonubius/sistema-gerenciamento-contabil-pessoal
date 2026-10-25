@@ -126,7 +126,10 @@ def test_previsao_mostra_o_que_ja_esta_agendado(sistema, contas, cartao):
                                    sistema.mes_atual(), sistema.hoje_iso())
     previsao = sistema.previsao_faturas(cartao, meses=4)
 
-    assert len(previsao) == 4
+    # Pode vir uma a menos: o ciclo que já fechou não é "próxima fatura".
+    # Fixar o número exato fazia o teste quebrar sozinho no dia do fechamento.
+    assert 3 <= len(previsao) <= 4
+    assert all(p["fechamento"] > sistema._ultimo_fechamento(cartao) for p in previsao)
     assert all(p["vencimento"] > p["fechamento"] for p in previsao)
     assert sum(p["parcelas"] for p in previsao) > 0
     assert previsao[0]["previsto"] >= previsao[0]["parcelas"]

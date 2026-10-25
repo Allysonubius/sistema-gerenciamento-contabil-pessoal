@@ -35,6 +35,8 @@ class Financeiro(ttk.Frame):
         self.btn_pagamento = self.cabecalho.botao("Marcar como pago", self.alternar_pagamento,
                                                   "Sucesso.TButton")
         self.cabecalho.botao("Corrigir", self.editar)
+        # A conta que não foi paga no dia não some: ela passa a vencer noutro dia.
+        self.btn_remarcar = self.cabecalho.botao("Mudar a data", self.remarcar)
         # Conta fixa: liga e desliga a repetição direto daqui, que é onde se olha.
         self.btn_fixa = self.cabecalho.botao("Desativar", self.alternar_fixa)
         ttk.Separator(self).pack(fill="x")
@@ -502,6 +504,24 @@ class Financeiro(ttk.Frame):
 
     def novo(self) -> None:
         DialogoTitulo(self, None, self._apos)
+
+    def remarcar(self) -> None:
+        item = self.tabela.selecionado()
+        if not item:
+            messagebox.showinfo("Mudar a data",
+                                "Escolha antes a conta que você quer remarcar.",
+                                parent=self)
+            return
+        pode, motivo = services.pode_remarcar(int(item))
+        if not pode:
+            messagebox.showwarning("Não dá para remarcar", motivo, parent=self)
+            return
+        DialogoRemarcar(self, int(item), self._apos_remarcar)
+
+    def _apos_remarcar(self, recado: str) -> None:
+        self.recarregar()
+        self.app.atualizar_dependentes()
+        self.app.notificar(recado)
 
     def editar(self) -> None:
         titulo_id = self._selecionado()
@@ -2982,3 +3002,118 @@ class DialogoBaixa(tk.Toplevel):
         elif self.titulo["recorrencia_id"]:
             self._oferecer_novo_valor_fixo(pago)
         self.destroy()
+
+
+# --------------------------------------------------------------------------- #
+class DialogoRemarcar(tk.Toplevel):
+    """Mudar o dia em que a conta vence — só esta, ou daqui para a frente.
+
+    A conta que não foi paga no dia não deixa de existir: ela passa a vencer
+    noutro dia. Corrigir isso campo por campo no cadastro inteiro era trabalho
+    demais para uma decisão tão pequena, e deixava a conta fixa cobrando o dia
+    antigo nos meses seguintes.
+    """
+
+    def __init__(self, master, titulo_id: int, ao_salvar):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.title("Mudar a data de vencimento")
+        self.titulo_id = titulo_id
+        self.ao_salvar = ao_salvar
+        self.titulo = services.obter_titulo(titulo_id)
+        self.remarcado = False
+
+        corpo = ttk.Frame(self, padding=(24, 20))
+        corpo.pack(fill="both", expand=True)
+
+        ttk.Label(corpo, text=self.titulo["descricao"], style="Secao.TLabel",
+                  wraplength=460, justify="left").pack(anchor="w")
+        ttk.Label(corpo, text=self._situacao(), style="Dica.TLabel", wraplength=460,
+                  justify="left").pack(anchor="w", pady=(4, 0))
+
+        ttk.Label(corpo, text="Passa a vencer em", style="Campo.TLabel").pack(
+            anchor="w", pady=(16, 2))
+        self.dt_nova = CampoData(corpo, self.titulo["vencimento"])
+        self.dt_nova.pack(anchor="w")
+
+        atalhos = ttk.Frame(corpo)
+        atalhos.pack(anchor="w", pady=(10, 0))
+        for opcao in services.sugestoes_de_remarcacao(titulo_id):
+            ttk.Button(atalhos, text=opcao["rotulo"],
+                       command=lambda d=opcao["data"]: self._usar(d)).pack(side="left",
+                                                                            padx=(0, 6))
+
+        self.var_seguintes = tk.BooleanVar(value=False)
+        self.chk_seguintes = ttk.Checkbutton(
+            corpo, variable=self.var_seguintes, command=self._explicar,
+            text="Valer também para os próximos meses desta conta fixa")
+        if self.titulo["recorrencia_id"]:
+            self.chk_seguintes.pack(anchor="w", pady=(16, 0))
+
+        self.lbl_efeito = ttk.Label(corpo, style="Dica.TLabel", wraplength=460,
+                                    justify="left")
+        self.lbl_efeito.pack(anchor="w", pady=(8, 0))
+        self.lbl_erro = ttk.Label(corpo, text="", style="Dica.TLabel",
+                                  foreground=CORES["perigo"], wraplength=460,
+                                  justify="left")
+        self.lbl_erro.pack(anchor="w", pady=(8, 0))
+
+        acoes = ttk.Frame(corpo)
+        acoes.pack(fill="x", pady=(18, 0))
+        ttk.Button(acoes, text="Mudar a data", style="Primario.TButton",
+                   command=self.salvar).pack(side="left")
+        ttk.Button(acoes, text="Cancelar", command=self.destroy).pack(side="left", padx=8)
+
+        self.dt_nova.bind("<KeyRelease>", self._explicar, add="+")
+        self._explicar()
+        centralizar(self, 520, 440)
+        self.grab_set()
+
+    # ------------------------------------------------------------------ #
+    def _situacao(self) -> str:
+        venc = self.titulo["vencimento"]
+        dias = (date.fromisoformat(services.hoje_iso()) - date.fromisoformat(venc)).days
+        if dias > 0:
+            quando = f"venceu há {dias} dia(s)"
+        elif dias == 0:
+            quando = "vence hoje"
+        else:
+            quando = f"vence em {-dias} dia(s)"
+        return (f"Hoje vence em {services.para_br(venc)} — {quando}."
+                f"   Valor: {services.moeda(float(self.titulo['valor']))}")
+
+    def _usar(self, data_iso: str) -> None:
+        self.dt_nova.set_iso(data_iso)
+        self._explicar()
+
+    def _explicar(self, *_a) -> None:
+        """Diz, antes de clicar, o que vai mudar — e o que não vai."""
+        try:
+            nova = self.dt_nova.get_iso()
+        except services.RegraNegocioError:
+            self.lbl_efeito.configure(text="")
+            return
+        partes = [f"Esta conta passa a vencer em {services.para_br(nova)}."]
+        if self.titulo["recorrencia_id"]:
+            if self.var_seguintes.get():
+                partes.append(
+                    f"Os próximos meses em aberto passam a vencer no dia"
+                    f" {int(nova[8:10])}. Meses já pagos não são tocados.")
+            else:
+                partes.append("Os próximos meses continuam no dia de sempre.")
+        self.lbl_efeito.configure(text="  ".join(partes))
+
+    def salvar(self) -> None:
+        try:
+            resultado = services.remarcar_titulo(
+                self.titulo_id, self.dt_nova.get_iso(), bool(self.var_seguintes.get()))
+        except services.RegraNegocioError as erro:
+            self.lbl_erro.configure(text=str(erro))
+            return
+        self.remarcado = True
+        self.destroy()
+        recado = f"Conta remarcada para {services.para_br(resultado['para'])}."
+        if resultado["seguintes"]:
+            recado += (f" Mais {resultado['seguintes']} mês(es) passaram para o dia"
+                       f" {resultado['dia']}.")
+        self.ao_salvar(recado)
