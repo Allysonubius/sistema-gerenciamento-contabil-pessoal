@@ -111,3 +111,126 @@ def test_cancelar_titulo_o_tira_da_lista_de_abertos(sistema, contas):
     sistema.cancelar_titulo(titulo)
     abertos = [t["id"] for t in sistema.listar_titulos(status="ABERTO")]
     assert titulo not in abertos
+
+
+# --------------------------------------------------------------------------- #
+# O formulário de cadastro, dividido em seções
+# --------------------------------------------------------------------------- #
+def _abrir_formulario(raiz_tk, titulo_id=None):
+    import importlib
+
+    modulo = importlib.reload(importlib.import_module("app.ui.financeiro"))
+    dialogo = modulo.DialogoTitulo(raiz_tk, titulo_id, lambda: None)
+    dialogo.grab_release()
+    return modulo, dialogo
+
+
+def _textos(widget) -> list[str]:
+    """Todo texto visível dentro de um widget, recursivamente."""
+    achados = []
+    try:
+        texto = widget.cget("text")
+        if isinstance(texto, str) and texto:
+            achados.append(texto)
+    except Exception:
+        pass
+    for filho in widget.winfo_children():
+        achados.extend(_textos(filho))
+    return achados
+
+
+def test_o_formulario_tem_as_seis_secoes(sistema, contas, raiz_tk):
+    """Formulário comprido sem divisão vira uma parede de campos."""
+    _modulo, dialogo = _abrir_formulario(raiz_tk)
+    try:
+        textos = _textos(dialogo)
+        for secao in ("O que é esta conta", "Quando vence e quanto é",
+                      "De onde sai o dinheiro", "Repete todo mês?",
+                      "Se atrasar", "Observação"):
+            assert secao in textos, f"falta a seção {secao!r}"
+        assert [str(n) for n in range(1, 7)] == [t for t in textos if t in "123456"]
+    finally:
+        dialogo.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_todos_os_campos_continuam_la(sistema, contas, raiz_tk):
+    _modulo, dialogo = _abrir_formulario(raiz_tk)
+    try:
+        for nome in ("cb_tipo", "dt_venc", "cp_valor", "var_desc", "sel_pagamento",
+                     "var_automatico", "sel_conta", "var_fixa", "linha_fixa",
+                     "var_prazo", "var_meses", "dt_ate", "var_base", "lbl_parcelas",
+                     "var_multa", "var_juros", "txt_obs", "lbl_fixa"):
+            assert hasattr(dialogo, nome), f"sumiu o campo {nome}"
+    finally:
+        dialogo.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_os_rotulos_mudam_quando_a_conta_e_de_receber(sistema, contas, raiz_tk):
+    _modulo, dialogo = _abrir_formulario(raiz_tk)
+    try:
+        dialogo.cb_tipo.set("Para eu receber")
+        dialogo._ajustar_categorias()
+
+        assert "entrar" in dialogo.lbl_pagamento.cget("text")
+        assert dialogo.lbl_categoria.cget("text") == "Origem do dinheiro"
+    finally:
+        dialogo.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_o_bloco_de_parcelas_aparece_e_some(sistema, contas, raiz_tk):
+    _modulo, dialogo = _abrir_formulario(raiz_tk)
+    try:
+        assert not dialogo.linha_fixa.winfo_manager()
+
+        dialogo.var_fixa.set(True)
+        dialogo._alternar_fixa()
+        assert dialogo.linha_fixa.winfo_manager()
+
+        dialogo.var_fixa.set(False)
+        dialogo._alternar_fixa()
+        assert not dialogo.linha_fixa.winfo_manager()
+    finally:
+        dialogo.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_o_resumo_das_parcelas_continua_calculando(sistema, contas, raiz_tk):
+    _modulo, dialogo = _abrir_formulario(raiz_tk)
+    try:
+        dialogo.var_fixa.set(True)
+        dialogo._alternar_fixa()
+        dialogo.cp_valor.set_valor(1200.0)
+        dialogo.var_meses.set(6)
+        dialogo.var_base.set("total")
+        dialogo._mostrar_parcelas()
+
+        texto = dialogo.lbl_parcelas.cget("text")
+        assert "6x de 200,00" in texto
+        assert "1.200,00" in texto
+    finally:
+        dialogo.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()
+
+
+def test_o_formulario_rola_e_os_botoes_ficam_fixos(sistema, contas, raiz_tk):
+    """Salvar que some numa tela pequena é a pior coisa que um formulário faz."""
+    _modulo, dialogo = _abrir_formulario(raiz_tk)
+    try:
+        assert hasattr(dialogo, "area"), "o corpo precisa rolar"
+        rodapes = [f for f in dialogo.winfo_children()
+                   if f.winfo_manager() == "pack"
+                   and f.pack_info().get("side") == "bottom"]
+        textos = [t for r in rodapes for t in _textos(r)]
+        assert "Salvar" in textos and "Cancelar" in textos
+    finally:
+        dialogo.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()

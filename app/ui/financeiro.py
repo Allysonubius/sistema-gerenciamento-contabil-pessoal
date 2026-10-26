@@ -7,8 +7,9 @@ from tkinter import messagebox, ttk
 
 from app import db, services
 from app.ui.theme import CORES, FONTE
-from app.ui.widgets import (AutoConsulta, Cabecalho, CampoData, CampoValor, Paginacao,
-                            SeletorConta, Tabela, centralizar)
+from app.ui.widgets import (AreaRolavel, AutoConsulta, Cabecalho, CampoData,
+                            CampoValor, Paginacao, SeletorConta, Tabela,
+                            centralizar)
 
 ROTULO_STATUS = {"ABERTO": "Em aberto", "QUITADO": "Já pago", "CANCELADO": "Cancelada"}
 
@@ -784,69 +785,90 @@ class DialogoTitulo(tk.Toplevel):
                  bg=CORES["superficie"], fg=CORES["texto_suave"], font=(FONTE, 10),
                  anchor="w").pack(fill="x", pady=(2, 0))
 
-        corpo = ttk.Frame(self, padding=(20, 14))
+        # Formulário comprido: em vez de espremer tudo, ele rola. Os botões
+        # ficam fora da rolagem, sempre à vista — "Salvar" que some quando a
+        # tela é pequena é a pior coisa que um formulário faz.
+        self.area = AreaRolavel(self)
+        self.area.pack(fill="both", expand=True)
+        corpo = ttk.Frame(self.area.interno, padding=(22, 14))
         corpo.pack(fill="both", expand=True)
-        corpo.columnconfigure(2, weight=1)
+        corpo.columnconfigure(0, weight=1)
 
-        ttk.Label(corpo, text="Esta conta é...", style="Campo.TLabel").grid(
-            row=0, column=0, sticky="w")
-        self.cb_tipo = ttk.Combobox(corpo, state="readonly", width=18,
+        # --- 1. o que é ---------------------------------------------------
+        bloco = self._secao(corpo, "1", "O que é esta conta",
+                            "O tipo define se o dinheiro sai ou entra.")
+        linha = ttk.Frame(bloco)
+        linha.pack(fill="x")
+        coluna = self._campo(linha, "Esta conta é...", lado="left")
+        self.cb_tipo = ttk.Combobox(coluna, state="readonly", width=20,
                                     values=["Para eu pagar", "Para eu receber"])
         self.cb_tipo.set("Para eu pagar")
-        self.cb_tipo.grid(row=1, column=0, sticky="w", pady=(3, 9), padx=(0, 16))
+        self.cb_tipo.pack(anchor="w")
         self.cb_tipo.bind("<<ComboboxSelected>>", lambda _e: self._ajustar_categorias())
 
-        ttk.Label(corpo, text="Vence em (1ª parcela)", style="Campo.TLabel").grid(
-            row=0, column=1, sticky="w")
-        self.dt_venc = CampoData(corpo, services.hoje_iso())
-        self.dt_venc.grid(row=1, column=1, sticky="w", pady=(3, 9), padx=(0, 16))
+        coluna = self._campo(bloco, "Descrição",
+                             "Ex.: Conta de luz de março, Mensalidade da faculdade.")
+        self.var_desc = tk.StringVar()
+        ttk.Entry(coluna, textvariable=self.var_desc).pack(fill="x")
+
+        # --- 2. quando e quanto -------------------------------------------
+        bloco = self._secao(corpo, "2", "Quando vence e quanto é",
+                            "Sendo parcelado, esta é a data da primeira parcela.")
+        linha = ttk.Frame(bloco)
+        linha.pack(fill="x")
+        coluna = self._campo(linha, "Vence em", lado="left")
+        self.dt_venc = CampoData(coluna, services.hoje_iso())
+        self.dt_venc.pack(anchor="w")
         self.dt_venc.var.trace_add("write", lambda *_: self._mostrar_parcelas())
 
-        ttk.Label(corpo, text="Valor (R$)", style="Campo.TLabel").grid(row=0, column=2, sticky="w")
-        self.cp_valor = CampoValor(corpo, width=16)
-        self.cp_valor.grid(row=1, column=2, sticky="w", pady=(3, 9))
+        coluna = self._campo(linha, "Valor (R$)", lado="left")
+        self.cp_valor = CampoValor(coluna, width=16)
+        self.cp_valor.pack(anchor="w")
 
-        ttk.Label(corpo, text="Descrição", style="Campo.TLabel").grid(row=2, column=0, sticky="w")
-        ttk.Label(corpo, text="Ex.: Conta de luz de março, Mensalidade da faculdade.",
-                  style="Dica.TLabel").grid(row=3, column=0, columnspan=3, sticky="w")
-        self.var_desc = tk.StringVar()
-        ttk.Entry(corpo, textvariable=self.var_desc).grid(
-            row=4, column=0, columnspan=3, sticky="we", pady=(3, 9))
-
-        self.lbl_pagamento = ttk.Label(corpo, text="De qual conta vai sair o dinheiro?",
-                                       style="Campo.TLabel")
-        self.lbl_pagamento.grid(row=5, column=0, columnspan=3, sticky="w")
-        ttk.Label(corpo, text="Conta corrente, carteira, poupança ou cartão. Já vem"
-                              " pré-escolhida na hora de dar baixa.",
-                  style="Dica.TLabel").grid(row=6, column=0, columnspan=3, sticky="w")
-        self.sel_pagamento = SeletorConta(corpo, tipos=("ATIVO", "PASSIVO"), width=56,
+        # --- 3. de onde sai o dinheiro -------------------------------------
+        bloco = self._secao(corpo, "3", "De onde sai o dinheiro",
+                            "Nada é descontado agora: isto só diz de onde sairá"
+                            " quando a conta for paga.")
+        coluna = self._campo(
+            bloco, "De qual conta vai sair o dinheiro?",
+            "Conta corrente, carteira, poupança ou cartão. Já vem pré-escolhida"
+            " na hora de dar baixa.")
+        self.lbl_pagamento = coluna.titulo
+        linha = ttk.Frame(coluna)
+        linha.pack(fill="x")
+        self.sel_pagamento = SeletorConta(linha, tipos=("ATIVO", "PASSIVO"), width=52,
                                           rotulo_vazio="(decidir na hora do pagamento)")
-        self.sel_pagamento.grid(row=7, column=0, columnspan=2, sticky="w", pady=(3, 9))
+        self.sel_pagamento.pack(side="left")
         # Débito automático: o sistema desconta sozinho no vencimento, sem você
         # precisar marcar como pago.
         self.var_automatico = tk.BooleanVar(value=False)
-        ttk.Checkbutton(corpo, variable=self.var_automatico,
-                        text="É débito automático nesta conta").grid(
-            row=7, column=2, sticky="w", pady=(3, 9))
+        ttk.Checkbutton(linha, variable=self.var_automatico,
+                        text="É débito automático nesta conta").pack(side="left", padx=12)
         # Mantido apenas para preservar o que já foi cadastrado antes deste campo.
         self.var_pessoa = tk.StringVar()
 
-        self.lbl_categoria = ttk.Label(corpo, text="Categoria do gasto", style="Campo.TLabel")
-        self.lbl_categoria.grid(row=8, column=0, sticky="w")
-        self.lbl_categoria_dica = ttk.Label(
-            corpo, text="Serve para o sistema saber em que grupo lançar quando você pagar.",
-            style="Dica.TLabel")
-        self.lbl_categoria_dica.grid(row=9, column=0, columnspan=3, sticky="w")
-        self.sel_conta = SeletorConta(corpo, tipos=("DESPESA",), width=60)
-        self.sel_conta.grid(row=10, column=0, columnspan=3, sticky="w", pady=(3, 9))
+        coluna = self._campo(
+            bloco, "Categoria do gasto",
+            "Serve para o sistema saber em que grupo lançar quando você pagar.")
+        self.lbl_categoria = coluna.titulo
+        self.lbl_categoria_dica = coluna.dica
+        self.sel_conta = SeletorConta(coluna, tipos=("DESPESA",), width=60)
+        self.sel_conta.pack(anchor="w")
 
-        self.quadro_fixa = ttk.Frame(corpo)
-        self.quadro_fixa.grid(row=11, column=1, columnspan=2, rowspan=2, sticky="w")
+        # --- 4. repetição --------------------------------------------------
+        bloco = self._secao(corpo, "4", "Repete todo mês?",
+                            "Conta fixa e parcelamento são a mesma coisa aqui: a"
+                            " diferença é ter prazo ou não.")
+        self.quadro_fixa = ttk.Frame(bloco)
+        self.quadro_fixa.pack(fill="x")
         self.var_fixa = tk.BooleanVar(value=False)
-        ttk.Checkbutton(self.quadro_fixa, variable=self.var_fixa, command=self._alternar_fixa,
-                        text="Repete todo mês (conta fixa ou parcelamento)").pack(anchor="w")
+        ttk.Checkbutton(self.quadro_fixa, variable=self.var_fixa,
+                        command=self._alternar_fixa,
+                        text="Sim, repete todo mês").pack(anchor="w")
         self.linha_fixa = ttk.Frame(self.quadro_fixa)
-        # Dois jeitos de dizer o prazo: quantas parcelas, ou até quando pagar.
+
+        ttk.Label(self.linha_fixa, text="Até quando", style="Campo.TLabel").pack(
+            anchor="w", pady=(8, 2))
         self.var_prazo = tk.StringVar(value="parcelas")
         linha_prazo = ttk.Frame(self.linha_fixa)
         linha_prazo.pack(anchor="w")
@@ -869,56 +891,114 @@ class DialogoTitulo(tk.Toplevel):
         ttk.Label(linha_ate, text="(divide o valor entre os meses até lá)",
                   style="Dica.TLabel").pack(side="left")
 
+        ttk.Label(self.linha_fixa, text="O valor que você digitou acima é...",
+                  style="Campo.TLabel").pack(anchor="w", pady=(10, 2))
         # Com prazo, o valor digitado pode ser a parcela ou o total a dividir.
         self.var_base = tk.StringVar(value="parcela")
         linha_base = ttk.Frame(self.linha_fixa)
-        linha_base.pack(anchor="w", pady=(6, 0))
+        linha_base.pack(anchor="w")
         ttk.Radiobutton(linha_base, variable=self.var_base, value="parcela",
                         command=self._mostrar_parcelas,
-                        text="o valor acima é de cada parcela").pack(anchor="w")
+                        text="de cada parcela").pack(anchor="w")
         ttk.Radiobutton(linha_base, variable=self.var_base, value="total",
                         command=self._mostrar_parcelas,
-                        text="o valor acima é o total (dividir pelas parcelas)").pack(
-            anchor="w")
+                        text="o total, para dividir pelas parcelas").pack(anchor="w")
         self.lbl_parcelas = ttk.Label(self.linha_fixa, style="Secao.TLabel",
-                                      wraplength=420, justify="left")
-        self.lbl_parcelas.pack(anchor="w", pady=(6, 0))
+                                      wraplength=560, justify="left")
+        self.lbl_parcelas.pack(anchor="w", pady=(8, 0))
 
-        atraso = ttk.Frame(corpo)
-        atraso.grid(row=13, column=0, columnspan=3, sticky="w", pady=(0, 12))
-        ttk.Label(atraso, text="Se atrasar:", style="Campo.TLabel").pack(side="left")
-        ttk.Label(atraso, text="multa de", style="Dica.TLabel").pack(side="left", padx=(10, 4))
+        # --- 5. atraso -----------------------------------------------------
+        bloco = self._secao(corpo, "5", "Se atrasar",
+                            "Multa e juros entram sozinhos a partir do dia seguinte"
+                            " ao vencimento. Deixe em zero para não cobrar nada.")
+        atraso = ttk.Frame(bloco)
+        atraso.pack(anchor="w")
+        ttk.Label(atraso, text="Multa de", style="Dica.TLabel").pack(side="left")
         self.var_multa = tk.StringVar(value=db.get_config("multa_padrao", "0"))
         ttk.Spinbox(atraso, from_=0, to=100, increment=0.5, width=6,
-                    textvariable=self.var_multa).pack(side="left")
-        ttk.Label(atraso, text="%  e juros de", style="Dica.TLabel").pack(side="left", padx=4)
+                    textvariable=self.var_multa).pack(side="left", padx=6)
+        ttk.Label(atraso, text="%  (uma vez só)   ·   juros de",
+                  style="Dica.TLabel").pack(side="left")
         self.var_juros = tk.StringVar(value=db.get_config("juros_padrao", "0"))
         ttk.Spinbox(atraso, from_=0, to=100, increment=0.5, width=6,
-                    textvariable=self.var_juros).pack(side="left")
-        ttk.Label(atraso, text="% ao mês (0 = não cobrar nada)",
-                  style="Dica.TLabel").pack(side="left", padx=4)
+                    textvariable=self.var_juros).pack(side="left", padx=6)
+        ttk.Label(atraso, text="% ao mês  (proporcional aos dias)",
+                  style="Dica.TLabel").pack(side="left")
 
-        ttk.Label(corpo, text="Observação (opcional)", style="Campo.TLabel").grid(
-            row=14, column=0, sticky="w")
-        self.txt_obs = tk.Text(corpo, height=2, font=(FONTE, 10), relief="solid", borderwidth=1)
-        self.txt_obs.grid(row=15, column=0, columnspan=3, sticky="we", pady=(3, 9))
+        # --- 6. observação -------------------------------------------------
+        bloco = self._secao(corpo, "6", "Observação",
+                            "Opcional. Fica guardada junto da conta.")
+        self.txt_obs = tk.Text(bloco, height=2, font=(FONTE, 10), relief="solid",
+                               borderwidth=1)
+        self.txt_obs.pack(fill="x")
 
-        self.lbl_fixa = ttk.Label(corpo, style="Dica.TLabel", wraplength=680, justify="left")
-        self.lbl_fixa.grid(row=16, column=0, columnspan=3, sticky="w", pady=(0, 10))
+        self.lbl_fixa = ttk.Label(corpo, style="Dica.TLabel", wraplength=680,
+                                  justify="left")
+        self.lbl_fixa.pack(anchor="w", pady=(10, 0))
 
-        botoes = ttk.Frame(corpo)
-        botoes.grid(row=17, column=0, columnspan=3, sticky="e")
-        ttk.Button(botoes, text="Salvar", style="Primario.TButton",
+        # Os botões ficam fora da área que rola.
+        rodape = ttk.Frame(self, padding=(22, 12))
+        rodape.pack(fill="x", side="bottom")
+        ttk.Separator(self).pack(fill="x", side="bottom")
+        ttk.Button(rodape, text="Salvar", style="Primario.TButton",
                    command=self.salvar).pack(side="right")
-        ttk.Button(botoes, text="Cancelar", command=self.destroy).pack(side="right", padx=8)
+        ttk.Button(rodape, text="Cancelar", command=self.destroy).pack(side="right",
+                                                                       padx=8)
 
         self.cp_valor.ao_mudar(self._mostrar_parcelas)
         self.var_meses.trace_add("write", lambda *_: self._mostrar_parcelas())
 
         self._carregar()
-        centralizar(self, 820, 720)
+        centralizar(self, 880, 760)
         self.grab_set()
         self.bind("<Escape>", lambda _e: self.destroy())
+
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _secao(pai, numero: str, titulo: str, descricao: str = "") -> ttk.Frame:
+        """Um bloco do formulário, com número, título e o que ele serve.
+
+        Um formulário comprido sem divisão vira uma parede de campos: a pessoa
+        não sabe onde está nem quanto falta. Cada bloco responde a uma pergunta.
+        """
+        quadro = ttk.Frame(pai, style="Superficie.TFrame", padding=(14, 12))
+        quadro.configure(relief="solid", borderwidth=1)
+        quadro.pack(fill="x", pady=(0, 10))
+
+        cabecalho = ttk.Frame(quadro, style="Superficie.TFrame")
+        cabecalho.pack(fill="x")
+        tk.Label(cabecalho, text=numero, bg=CORES["primaria"], fg="#ffffff",
+                 font=(FONTE, 9, "bold"), width=3).pack(side="left")
+        ttk.Label(cabecalho, text=titulo, style="SecaoSuperficie.TLabel").pack(
+            side="left", padx=8)
+        if descricao:
+            ttk.Label(quadro, text=descricao, style="DicaSuperficie.TLabel",
+                      wraplength=700, justify="left").pack(anchor="w", pady=(2, 0))
+
+        corpo = ttk.Frame(quadro, style="Superficie.TFrame")
+        corpo.pack(fill="x", pady=(10, 0))
+        return corpo
+
+    @staticmethod
+    def _campo(pai, titulo: str, dica: str = "", lado: str | None = None) -> ttk.Frame:
+        """Rótulo (e dica) acima do campo, devolvendo onde pôr o campo.
+
+        O quadro devolvido carrega `.titulo` e `.dica`, porque alguns rótulos
+        mudam de texto conforme a conta é de pagar ou de receber.
+        """
+        quadro = ttk.Frame(pai, style="Superficie.TFrame")
+        if lado:
+            quadro.pack(side=lado, anchor="n", padx=(0, 20))
+        else:
+            quadro.pack(fill="x", pady=(0, 8))
+        quadro.titulo = ttk.Label(quadro, text=titulo, style="CampoSuperficie.TLabel")
+        quadro.titulo.pack(anchor="w")
+        quadro.dica = None
+        if dica:
+            quadro.dica = ttk.Label(quadro, text=dica, style="DicaSuperficie.TLabel",
+                                    wraplength=700, justify="left")
+            quadro.dica.pack(anchor="w", pady=(0, 3))
+        return quadro
 
     def _ajustar_categorias(self) -> None:
         pagar = self.cb_tipo.get() == "Para eu pagar"
@@ -985,13 +1065,13 @@ class DialogoTitulo(tk.Toplevel):
         self.lbl_parcelas.configure(text=texto, foreground=CORES["texto"])
 
     def _ajustar_altura(self) -> None:
-        """A janela cresce quando as opções de parcelas aparecem.
+        """Mantido por compatibilidade: a janela agora rola em vez de crescer.
 
-        Sem isso, o quadro empurrava a observação e os botões para fora da tela.
+        Antes o formulário esticava a janela quando o quadro das parcelas
+        aparecia, e numa tela pequena isso empurrava o botão Salvar para fora.
+        Com a área rolável e os botões fixos no rodapé, não há mais o que
+        esticar — e esticar brigaria com a rolagem.
         """
-        self.update_idletasks()
-        altura = min(max(self.winfo_reqheight(), 660), self.winfo_screenheight() - 80)
-        self.geometry(f"{max(self.winfo_width(), self.winfo_reqwidth())}x{altura}")
 
     def _alternar_fixa(self) -> None:
         # Em conta que já é fixa, o prazo não se escolhe aqui: desmarcar encerra.

@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 643 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 649 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
