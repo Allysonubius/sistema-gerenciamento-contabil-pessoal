@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from tkinter import messagebox, ttk
 
 from app import db, services
+from app.ui import perguntas
 from app.ui.theme import CORES, FONTE
 from app.ui.widgets import (AreaRolavel, AutoConsulta, Cabecalho, CampoData,
                             CampoValor, Paginacao, SeletorConta, Tabela,
@@ -3027,31 +3028,61 @@ class DialogoBaixa(tk.Toplevel):
         return messagebox.askyesno("Confirme o valor", "\n".join(linhas), parent=self)
 
     def _oferecer_novo_valor_fixo(self, pago: float) -> None:
-        """Conta fixa que mudou de valor: pergunta se vale para os próximos meses."""
+        """Conta fixa que mudou de valor: quando faz sentido, oferece propagar.
+
+        Receber menos num mês quase nunca é o salário novo — é desconto, falta,
+        adiantamento. Antes o programa perguntava do mesmo jeito, com a caixa do
+        Windows e "Sim" já escolhido, e um Enter distraído rebaixava o ano
+        inteiro. Agora a diferença para menos fica só no mês, e quem de fato
+        teve corte muda o valor em "Salários e Rendas".
+        """
         if not self.titulo["recorrencia_id"]:
             return
-        if abs(round(pago - float(self.titulo["valor"]), 2)) < 0.005:
+        previsto = float(self.titulo["valor"])
+        diferenca = round(pago - previsto, 2)
+        if abs(diferenca) < 0.005:
             return
-        competencia = self.titulo["competencia"] or self.titulo["vencimento"][:7]
+
         recebe = self.titulo["tipo"] == "RECEBER"
-        if not messagebox.askyesno(
-                "Vale para os próximos meses?",
-                f"'{self.titulo['descricao']}' é uma conta fixa de"
-                f" {services.moeda(self.titulo['valor'])} e desta vez"
-                f" {'entrou' if recebe else 'saiu'} {services.moeda(pago)}.\n\n"
-                "Os próximos meses passam a usar o valor novo?\n\n"
-                "(Responda não se foi coisa de um mês só.)", parent=self.master):
+        competencia = self.titulo["competencia"] or self.titulo["vencimento"][:7]
+        if diferenca < 0:
+            perguntas.avisar(
+                self.master, "Registrado só neste mês",
+                f"Os próximos meses continuam previstos em"
+                f" {services.moeda(previsto)}.\n\n"
+                + ("Se o seu salário mudou de verdade, altere o valor em"
+                   " 'Salários e Rendas'." if recebe else
+                   "Se a conta mudou de valor para valer, corrija-a aqui mesmo,"
+                   " em 'Corrigir'."),
+                destaque=f"{services.mes_nome(competencia).capitalize()}:"
+                         f" {'entrou' if recebe else 'saiu'} {services.moeda(pago)},"
+                         f" {services.moeda(abs(diferenca))} a menos que o previsto.")
+            return
+
+        escolha = perguntas.escolher(
+            self.master, "Vale para os próximos meses?",
+            f"'{self.titulo['descricao']}' estava em {services.moeda(previsto)} e desta"
+            f" vez {'entrou' if recebe else 'saiu'} {services.moeda(pago)}"
+            f" — {services.moeda(diferenca)} a mais.",
+            [("Foi só neste mês",
+              f"{services.mes_nome(competencia).capitalize()} fica com"
+              f" {services.moeda(pago)} e os próximos continuam em"
+              f" {services.moeda(previsto)}.", "mes"),
+             ("Passou a ser este o valor",
+              f"Os meses em aberto daqui para a frente passam a usar"
+              f" {services.moeda(pago)}. Os já pagos não mudam.", "sempre")])
+        if escolha != "sempre":
             return
         try:
             atingidos = services.aplicar_reajuste(self.titulo["recorrencia_id"],
                                                   competencia, pago)
         except services.RegraNegocioError as erro:
-            messagebox.showwarning("Não foi possível", str(erro), parent=self.master)
+            perguntas.avisar(self.master, "Não foi possível", str(erro))
             return
-        messagebox.showinfo(
-            "Valor atualizado",
-            f"{atingidos} mês(es) em aberto passaram a usar {services.moeda(pago)}."
-            " Os meses já pagos não mudaram.", parent=self.master)
+        perguntas.avisar(
+            self.master, "Valor atualizado", "Os meses já pagos não mudaram.",
+            destaque=f"{atingidos} mês(es) em aberto passaram a usar"
+                     f" {services.moeda(pago)}.")
 
     def confirmar(self) -> None:
         try:

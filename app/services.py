@@ -4322,7 +4322,10 @@ def orcamento_do_mes(competencia: str | None = None,
     ano, mes = (int(p) for p in competencia.split("-"))
     fim = date(ano, mes, _ultimo_dia(ano, mes)).isoformat()
 
-    hoje = date.today()
+    # Pela mesma noção de hoje que o resto do sistema usa: com date.today()
+    # direto, o orçamento discordava de todas as outras telas sempre que a
+    # data era simulada — e o teste da projeção passava 30 dias por mês.
+    hoje = date.fromisoformat(hoje_iso())
     dias_no_mes = _ultimo_dia(ano, mes)
     if hoje.strftime("%Y-%m") == competencia:
         dias_corridos, dias_restantes = hoje.day, dias_no_mes - hoje.day

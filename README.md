@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 649 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 660 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -422,6 +422,23 @@ Mês já pago nunca é tocado — ele é história, e história não se remarca.
 
 A competência **não** muda junto: a conta de outubro paga em novembro continua sendo a
 conta de outubro. Dia 31 em mês que não tem 31 cai no último dia que existe.
+
+## Receber menos num mês não é o salário novo
+
+Ao dar baixa numa conta fixa por um valor diferente do previsto, o programa perguntava
+se os próximos meses passavam a usar o valor novo — com a caixa do Windows e *Sim* já
+escolhido. Um Enter distraído rebaixava o ano inteiro.
+
+Agora a regra é assimétrica, porque a vida é:
+
+- **Entrou (ou saiu) menos:** fica só naquele mês, sem pergunta. Quase nunca é o
+  valor novo — é desconto, falta, adiantamento. O aviso diz onde mudar de verdade,
+  se for o caso.
+- **Entrou (ou saiu) mais:** aí sim pergunta, e a opção *Foi só neste mês* vem
+  escolhida. A outra explica exatamente quantos meses mudariam.
+
+As caixas do sistema saíram desse caminho: são janelas da própria ferramenta, com a
+opção segura em primeiro lugar e cada escolha dizendo o que faz.
 
 ## Fechamento de competência
 
