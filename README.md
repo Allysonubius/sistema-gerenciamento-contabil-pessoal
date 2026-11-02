@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 660 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 672 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -408,6 +408,26 @@ O medidor compara três coisas:
 O cartão *Poupança deste mês*, no painel, fica verde quando a meta foi batida, amarelo
 quando faltou e vermelho quando nada foi guardado, e diz quanto falta. A janela traz
 ainda os últimos seis meses, para ver se o hábito se sustenta.
+
+## O rodapé de Contas a Pagar conta o dinheiro
+
+A lista de contas a pagar diz quanto se deve, não se **dá para pagar**. Quem decide
+o que fazer no mês precisa das duas coisas na mesma tela, então o rodapé ganhou uma
+segunda linha: **quanto há em conta** e **quanto sobra depois de pagar tudo**.
+
+Nem toda conta a pagar sai do banco, e o rodapé diz isso em vez de esconder:
+
+- as que vão para o **cartão** entram na fatura e saem quando ela vencer;
+- as **sem conta escolhida** contam, porque vão sair de algum lugar;
+- o resto sai das contas de dinheiro, e é esse que desconta do saldo.
+
+Os números são calculados sobre **as linhas que a tela está mostrando**, não sobre uma
+consulta paralela: dois números para a mesma coisa na mesma tela confundem mais do
+que ajudam.
+
+E o total pode cobrir e mesmo assim faltar numa conta específica — o dinheiro existe,
+só está no lugar errado, que é o que trava o Pix na hora. O rodapé nomeia essas
+contas.
 
 ## Mudar a data de uma conta
 

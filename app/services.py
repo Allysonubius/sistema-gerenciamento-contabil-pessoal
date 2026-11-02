@@ -5169,6 +5169,91 @@ def previsao_por_conta(ate: str | None = None) -> dict:
     }
 
 
+def caixa_para_as_contas(titulos: list) -> dict:
+    """O dinheiro em conta cobre exatamente estas contas?
+
+    Recebe as linhas que a tela está mostrando, em vez de fazer uma consulta
+    própria: dois números para a mesma coisa na mesma tela confundem mais do
+    que ajudam.
+
+    Nem toda conta a pagar sai do banco. As que vão para o cartão entram na
+    fatura e saem quando ela vencer; as que ainda não têm conta escolhida vão
+    sair de algum lugar e por isso contam. A separação é dita na tela — some
+    com ela e o total nunca bate com a lista de cima.
+    """
+    contas_de_dinheiro = {c["id"]: c for c in listar_carteiras()
+                          if grupo_da_conta(c) == GRUPO_DO_FLUXO}
+
+    do_dinheiro = no_cartao = sem_conta = a_receber = 0.0
+    por_conta: dict[int, float] = {}
+    for titulo in titulos:
+        if titulo["status"] != "ABERTO":
+            continue
+        valor = round(float(titulo["valor_atualizado"]
+                            if "valor_atualizado" in titulo.keys()
+                            and titulo["valor_atualizado"] else titulo["valor"]), 2)
+        if titulo["tipo"] == "RECEBER":
+            a_receber += valor
+            continue
+        conta = titulo["conta_pagamento_id"]
+        if conta in contas_de_dinheiro:
+            do_dinheiro += valor
+            por_conta[conta] = round(por_conta.get(conta, 0.0) + valor, 2)
+        elif conta:
+            no_cartao += valor
+        else:
+            sem_conta += valor
+
+    tem = total_disponivel()["tem"]
+    sai_do_dinheiro = round(do_dinheiro + sem_conta, 2)
+    depois_de_pagar = round(tem - sai_do_dinheiro, 2)
+    com_recebimentos = round(depois_de_pagar + a_receber, 2)
+
+    negativas = []
+    for conta_id, devido in por_conta.items():
+        saldo = saldo_conta(conta_id)
+        if round(saldo - devido, 2) < -CENTAVO:
+            negativas.append({"id": conta_id,
+                              "nome": contas_de_dinheiro[conta_id]["nome"],
+                              "saldo": saldo,
+                              "devido": devido,
+                              "fica": round(saldo - devido, 2)})
+    negativas.sort(key=lambda c: c["fica"])
+
+    return {
+        "tem": tem,
+        "a_pagar": round(do_dinheiro + no_cartao + sem_conta, 2),
+        "sai_do_dinheiro": sai_do_dinheiro,
+        "no_cartao": round(no_cartao, 2),
+        "sem_conta": round(sem_conta, 2),
+        "a_receber": round(a_receber, 2),
+        "depois_de_pagar": depois_de_pagar,
+        "com_recebimentos": com_recebimentos,
+        "cobre": depois_de_pagar >= -CENTAVO,
+        "cobre_com_recebimentos": com_recebimentos >= -CENTAVO,
+        "falta": round(max(0.0, -depois_de_pagar), 2),
+        "falta_com_recebimentos": round(max(0.0, -com_recebimentos), 2),
+        "contas_negativas": negativas,
+    }
+
+
+def recado_do_caixa(caixa: dict) -> str:
+    """A frase que resume a situação, pronta para a tela."""
+    if caixa["sai_do_dinheiro"] <= CENTAVO:
+        if caixa["no_cartao"] > CENTAVO:
+            return (f"Nada sai das suas contas por aqui:"
+                    f" {moeda(caixa['no_cartao'])} vão para o cartão.")
+        return f"Nada a pagar por aqui. Você tem {moeda(caixa['tem'])} em conta."
+    if caixa["cobre"]:
+        return (f"O dinheiro que você tem cobre: sobram"
+                f" {moeda(caixa['depois_de_pagar'])} depois de pagar tudo.")
+    if caixa["cobre_com_recebimentos"]:
+        return (f"Faltam {moeda(caixa['falta'])} hoje, mas o que ainda entra cobre:"
+                f" sobrariam {moeda(caixa['com_recebimentos'])}.")
+    return (f"Faltam {moeda(caixa['falta_com_recebimentos'])} para pagar tudo,"
+            " mesmo contando o que ainda entra.")
+
+
 def previsao_mensal(meses: int | None = None) -> list[dict]:
     """Resumo mês a mês do que já está agendado para o futuro.
 

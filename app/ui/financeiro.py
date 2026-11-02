@@ -217,6 +217,20 @@ class Financeiro(ttk.Frame):
                         variable=self.var_atrasadas, command=self.recarregar,
                         style="Superficie.TCheckbutton").pack(side="right")
 
+        # Segunda linha: o dinheiro que existe para pagar o que está na lista.
+        # A lista sozinha diz quanto se deve, não se dá para pagar.
+        caixa = ttk.Frame(rodape, style="Superficie.TFrame")
+        caixa.pack(fill="x", pady=(10, 0))
+        self.lbl_tenho = ttk.Label(caixa, style="Total.TLabel",
+                                   background=CORES["superficie"])
+        self.lbl_tenho.pack(side="left", padx=(0, 28))
+        self.lbl_depois = ttk.Label(caixa, style="Total.TLabel",
+                                    background=CORES["superficie"])
+        self.lbl_depois.pack(side="left", padx=(0, 28))
+        self.lbl_recado = ttk.Label(caixa, style="DicaSuperficie.TLabel",
+                                    wraplength=620, justify="left")
+        self.lbl_recado.pack(side="left")
+
         # Linha própria para a soma das pendências: aparece só quando existem.
         self.lbl_pendencias = ttk.Label(corpo, style="Secao.TLabel", foreground=CORES["perigo"],
                                         wraplength=1000, justify="left")
@@ -372,6 +386,9 @@ class Financeiro(ttk.Frame):
                      "desde": None}
         criterio = ("competencia" if self.cb_criterio.get() == "Mês de referência"
                     else "vencimento")
+        # Guardadas para o rodapé contar o dinheiro sobre exatamente o que a
+        # tela está mostrando — e não sobre uma consulta paralela.
+        linhas = []
         # Ao olhar o mês atual ou um futuro, o que ficou sem pagar antes vem junto:
         # a conta atrasada não some da lista só porque o mês virou.
         trazer = (self.var_atrasadas.get() and not self._so_vencidas
@@ -427,6 +444,7 @@ class Financeiro(ttk.Frame):
             if competencia != t["vencimento"][:7]:
                 tags = tags + ("destaque",) if "destaque" not in tags else tags
 
+            linhas.append(t)
             self.tabela.inserir(
                 (services.para_br(t["vencimento"]), mes_ref, situacao, quem,
                  t["descricao"], t["conta_pagamento_nome"] or "— não definida —",
@@ -469,6 +487,34 @@ class Financeiro(ttk.Frame):
             foreground=CORES["sucesso"] if saldo >= 0 else CORES["perigo"])
         self.lbl_entrou.configure(text=f"Entrou: {services.moeda(total_entrou)}",
                                   foreground=CORES["sucesso"])
+        self._mostrar_caixa(linhas)
+
+    def _mostrar_caixa(self, linhas: list) -> None:
+        """Diz se o dinheiro que existe cobre as contas que estão na lista."""
+        caixa = services.caixa_para_as_contas(linhas)
+        self.lbl_tenho.configure(
+            text=f"Tenho em conta: {services.moeda(caixa['tem'])}",
+            foreground=CORES["sucesso"] if caixa["tem"] > 0 else CORES["perigo"])
+        self.lbl_depois.configure(
+            text=f"Depois de pagar: {services.moeda(caixa['depois_de_pagar'])}",
+            foreground=CORES["sucesso"] if caixa["cobre"] else CORES["perigo"])
+
+        recado = services.recado_do_caixa(caixa)
+        # O total pode cobrir e mesmo assim faltar numa conta específica: o
+        # dinheiro existe, só está no lugar errado — e é isso que trava o Pix.
+        if caixa["contas_negativas"]:
+            nomes = ", ".join(f"{c['nome']} ({services.moeda(c['fica'])})"
+                              for c in caixa["contas_negativas"][:3])
+            recado += f"   Fica faltando em: {nomes}."
+        if caixa["no_cartao"] > 0.005:
+            recado += (f"   {services.moeda(caixa['no_cartao'])} vão para o cartão e"
+                       " saem na fatura.")
+        if caixa["sem_conta"] > 0.005:
+            recado += (f"   {services.moeda(caixa['sem_conta'])} ainda sem conta"
+                       " escolhida.")
+        self.lbl_recado.configure(
+            text=recado,
+            foreground=CORES["perigo"] if not caixa["cobre"] else CORES["texto_suave"])
 
     def _rodar_automaticos(self) -> None:
         """Desconta as contas de débito automático já vencidas e avisa o usuário."""

@@ -147,7 +147,13 @@ def test_mes_ja_pago_nunca_e_remarcado(sistema, fixa, contas):
 def test_dia_31_cabe_em_mes_curto(sistema, fixa):
     """Fevereiro não tem 31: o vencimento cai no último dia que existe."""
     _recorrencia, titulos = fixa
-    sistema.remarcar_titulo(titulos[0]["id"], f"{titulos[0]['vencimento'][:7]}-31",
+    # A remarcação em si precisa de uma data que exista, então o dia 31 é
+    # escolhido num mês que tenha 31 — o que se testa é o que acontece nos
+    # meses seguintes, que nem sempre têm.
+    com_31 = next(t for t in titulos
+                  if sistema._ultimo_dia(*(int(p) for p in t["competencia"].split("-")))
+                  == 31)
+    sistema.remarcar_titulo(com_31["id"], f"{com_31['competencia']}-31",
                             seguintes=True)
 
     for titulo in sistema.listar_titulos(status="ABERTO"):
