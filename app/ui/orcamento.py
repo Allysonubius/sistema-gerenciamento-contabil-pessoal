@@ -76,15 +76,18 @@ class Orcamento(ttk.Frame):
             ("projecao", "Deve fechar em", 125, "e"),
             ("sugerido", "Devia gastar", 115, "e"),
             ("pct_renda", "% da renda", 95, "center"),
-            ("historico", "Mês passado", 120, "e"),
+            ("base", "Base (3 meses)", 125, "e"),
+            ("excesso", "Passou da base", 125, "e"),
         ], on_duplo_clique=lambda _i: self.definir(), largura_livre=True, altura=8)
         self.tabela.definir_texto_vazio(
-            "Nenhuma categoria com teto ou gasto neste mês. Clique em 'Sugerir pela média'"
-            " para começar.")
+            "Nenhuma categoria com teto ou gasto neste mês. Clique em 'Sugerir pelo"
+            " histórico' para começar.")
         self.tabela.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
 
         ttk.Label(corpo, text="Clique duas vezes em uma categoria para mudar o teto. O teto vale"
-                              " para todos os meses, salvo se você ajustar só este.",
+                              " para todos os meses, salvo se você ajustar só este."
+                              "  ·  A base é o que a categoria costuma consumir nos três"
+                              " meses fechados mais recentes.",
                   style="Dica.TLabel").grid(row=3, column=0, sticky="w", pady=(8, 0))
 
     # ------------------------------------------------------------------ #
@@ -117,17 +120,27 @@ class Orcamento(ttk.Frame):
             else:
                 consumo, teto, restante, por_dia = "sem teto", "—", "—", "—"
 
-            if linha["mediana_historica"] > 0.005:
-                historico = services.moeda(linha["mediana_historica"])
+            if linha["base"] > 0.005:
+                base = services.moeda(linha["base"])
                 if linha["estouros_anteriores"]:
-                    historico += "  (estourou)"
+                    base += f"  (estourou {linha['estouros_anteriores']}x)"
             else:
-                historico = "—"
+                base = "—"
+
+            # Quanto o mês passou do que a categoria costuma consumir. Onde não
+            # há teto definido, esta é a única régua que existe — e é onde o
+            # gasto crescia sem ninguém notar.
+            if linha["excesso_sobre_base"] > 0.005:
+                excesso = "+" + services.moeda(linha["excesso_sobre_base"])
+            elif linha["vai_passar_da_base"]:
+                excesso = "vai passar"
+            else:
+                excesso = "—"
 
             tags: tuple[str, ...] = ()
-            if linha["estourou"]:
+            if linha["estourou"] or linha["excesso_sobre_base"] > 0.005:
                 tags = ("negativo",)
-            elif linha["risco"]:
+            elif linha["risco"] or linha["vai_passar_da_base"]:
                 tags = ("destaque",)
 
             sugestao = sugestoes.get(linha["conta_id"])
@@ -146,7 +159,7 @@ class Orcamento(ttk.Frame):
                  services.moeda(linha["comprometido"]) if linha["comprometido"] else "—",
                  consumo, restante, por_dia,
                  services.moeda(linha["projecao"]) if linha["projecao"] else "—",
-                 sugerido, pct_renda, historico),
+                 sugerido, pct_renda, base, excesso),
                 iid=linha["conta_id"], tags=tags)
         self.tabela.finalizar()
 
@@ -185,8 +198,19 @@ class Orcamento(ttk.Frame):
                               f" {services.moeda(abs(sobra))} a descoberto.")
             avisos.append(linha)
 
+        if resumo["acima_da_base"]:
+            nomes = ", ".join(f"{l['nome']} +{services.moeda(l['excesso_sobre_base'])}"
+                              for l in resumo["acima_da_base"][:4])
+            avisos.append(
+                f"Passou do que costuma gastar em {len(resumo['acima_da_base'])}"
+                f" categoria(s), somando {services.moeda(resumo['excesso_sobre_base'])}:"
+                f" {nomes}.")
+        if resumo["vao_passar_da_base"]:
+            avisos.append("No ritmo de agora vai passar da base em: "
+                          + ", ".join(l["nome"] for l in resumo["vao_passar_da_base"][:4]))
+
         if plano["total_sugerido"] > 0.005:
-            texto = (f"Plano enxuto, com base no mês passado:"
+            texto = (f"Plano enxuto, com base nos três meses fechados:"
                      f" {services.moeda(plano['total_sugerido'])}"
                      f" ({plano['percentual_da_renda']:.0f}% do que entra) —"
                      f" {services.moeda(plano['total_fixo'])} já são contas fixas."
@@ -207,7 +231,8 @@ class Orcamento(ttk.Frame):
                           f" ({nomes}) — clique duas vezes para definir um.")
         self.lbl_aviso.configure(
             text="\n".join(avisos) or "Tudo dentro do planejado até aqui.",
-            foreground=CORES["perigo"] if resumo["estouradas"] else CORES["texto_suave"])
+            foreground=CORES["perigo"] if resumo["estouradas"] or resumo["acima_da_base"]
+            else CORES["texto_suave"])
 
         self._dados_barra = (resumo["previsto"], resumo["gasto"])
         self._desenhar_barra()
@@ -248,7 +273,9 @@ class Orcamento(ttk.Frame):
         if not messagebox.askyesno(
                 "Sugerir tetos",
                 "O sistema vai propor um teto para cada categoria com base no que você"
-                " gastou no mês passado.\n\nCategorias que já têm teto não são alteradas."
+                " gastou nos três meses fechados mais recentes — o valor do meio, que"
+                " não se deixa levar por um mês atípico.\n\nCategorias que já têm teto"
+                " não são alteradas."
                 "\n\nContinuar?",
                 parent=self):
             return
@@ -283,8 +310,9 @@ class Orcamento(ttk.Frame):
                 f"O plano propõe gastar {services.moeda(plano['total_sugerido'])}"
                 f" ({plano['percentual_da_renda']:.0f}% da renda), sobrando"
                 f" {services.moeda(plano['sobra'])}.\n\n"
-                f"Base: o que cada categoria gastou no mês passado, mais o que já é"
-                f" conta fixa deste mês.\n"
+                f"Base: o mês mais barato de cada categoria nos três meses fechados"
+                f" mais recentes, mais o que já é conta fixa deste mês. Não é um valor"
+                f" inventado para apertar — é um gasto que já aconteceu.\n"
                 f"Maiores tetos: {maiores}.\n\n"
                 "Os tetos atuais serão substituídos. Continuar?", parent=self):
             return
@@ -375,7 +403,12 @@ class DialogoTeto(tk.Toplevel):
         return services.sugerir_orcamento(conta_id) if conta_id else 0.0
 
     def _mostrar_media(self) -> None:
-        """Mostra o gasto típico, a média e quantas vezes a categoria estourou."""
+        """Mostra a base dos meses fechados, o piso e quantas vezes estourou.
+
+        O piso aparece junto porque é ele que responde "dá para gastar menos?":
+        um mês em que a categoria custou aquilo já aconteceu, então o valor não
+        é teoria.
+        """
         conta_id = self.sel_conta.get_conta_id()
         if not conta_id:
             self.lbl_media.configure(text="")
@@ -383,11 +416,15 @@ class DialogoTeto(tk.Toplevel):
         historico = services._historico_da_categoria(conta_id, services.mes_atual())
         if not historico["meses_com_gasto"]:
             self.lbl_media.configure(
-                text="Esta categoria não teve gasto no mês passado.")
+                text="Esta categoria não teve gasto nos últimos meses fechados.")
             return
-        texto = f"No mês passado você gastou {services.moeda(historico['mediana'])} aqui."
+        quantos = historico["meses_com_gasto"]
+        texto = (f"Nos últimos {quantos} mês(es) com gasto, o valor do meio foi"
+                 f" {services.moeda(historico['mediana'])}.")
+        if historico["piso"] > 0.005 and historico["piso"] < historico["mediana"] - 0.005:
+            texto += f" O mês mais barato ficou em {services.moeda(historico['piso'])}."
         if historico["estouros"]:
-            texto += " Estourou o teto."
+            texto += f" Estourou o teto {historico['estouros']}x."
         self.lbl_media.configure(text=texto)
 
     def _usar_media(self) -> None:

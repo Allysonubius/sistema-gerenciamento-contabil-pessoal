@@ -4283,18 +4283,25 @@ def teto_da_categoria(conta_id: int, competencia: str) -> tuple[float, bool]:
 
 DIAS_MINIMOS_PARA_RITMO = 5     # antes disso o mês é curto demais para extrapolar
 
-# O orçamento se guia pelo mês passado: é o retrato mais próximo da vida de
-# agora. Olhar meio ano para trás trazia valores de uma realidade que já mudou.
-MESES_BASE_ORCAMENTO = 1
+# O orçamento se guia pelos três meses fechados mais recentes.
+#
+# Um mês só é um retrato, e retrato não distingue hábito de acidente: o mês do
+# conserto do carro virava o teto do ano, e o mês de férias virava a promessa
+# de que dali em diante se gasta pouco. Três meses bastam para separar as duas
+# coisas e ainda são perto o suficiente da vida de agora — olhar meio ano para
+# trás trazia valores de uma realidade que já mudou.
+MESES_BASE_ORCAMENTO = 3
 
 
 def _historico_da_categoria(conta_id: int, ate_competencia: str,
                             meses: int = MESES_BASE_ORCAMENTO) -> dict:
     """Quanto a categoria costuma consumir, olhando os meses fechados.
 
-    Devolve média, mediana e quantas vezes o teto foi estourado. A mediana é o
-    número honesto: um mês atípico (a viagem, o conserto do carro) puxa a média
-    para cima e faria o orçamento inteiro mentir.
+    Devolve média, mediana, piso, topo e quantas vezes o teto foi estourado. A
+    mediana é o número honesto: um mês atípico (a viagem, o conserto do carro)
+    puxa a média para cima e faria o orçamento inteiro mentir. O piso é o mês
+    mais barato que de fato aconteceu — é a prova de que dá para gastar aquilo,
+    e por isso é dele que sai a meta de enxugar.
     """
     anteriores = [m for m in meses_do_historico() if m < ate_competencia][-meses:]
     valores, estouros = [], 0
@@ -4326,6 +4333,9 @@ def _historico_da_categoria(conta_id: int, ate_competencia: str,
     # pode entrar na projeção como se fosse todo mês.
     esperado = round(sum(valores) / len(valores), 2) if valores else 0.0
     return {"media": media, "mediana": round(mediana, 2), "esperado": esperado,
+            "piso": round(min(usados), 2) if usados else 0.0,
+            "topo": round(max(usados), 2) if usados else 0.0,
+            "competencias": anteriores,
             "meses": len(valores), "meses_com_gasto": len(usados), "estouros": estouros}
 
 
@@ -4424,6 +4434,21 @@ def orcamento_do_mes(competencia: str | None = None,
             "mediana_historica": historico["mediana"],
             "meses_historico": historico["meses_com_gasto"],
             "estouros_anteriores": historico["estouros"],
+            # A base é o que a categoria costuma consumir nos meses fechados —
+            # e serve de régua mesmo onde nunca se definiu um teto, que é
+            # justamente onde o gasto crescia sem ninguém notar.
+            "base": historico["mediana"],
+            "piso_historico": historico["piso"],
+            "topo_historico": historico["topo"],
+            "meses_base": historico["meses"],
+            "acima_da_base": (historico["mediana"] > CENTAVO
+                              and gasto > historico["mediana"] + CENTAVO),
+            "excesso_sobre_base": (round(gasto - historico["mediana"], 2)
+                                   if historico["mediana"] > CENTAVO
+                                   and gasto > historico["mediana"] + CENTAVO else 0.0),
+            "vai_passar_da_base": (historico["mediana"] > CENTAVO
+                                   and gasto <= historico["mediana"] + CENTAVO
+                                   and projecao > historico["mediana"] + CENTAVO),
             "estourou": teto > 0 and gasto > teto + CENTAVO,
             "risco": teto > 0 and not gasto > teto and projecao > teto + CENTAVO,
             "por_dia_restante": (round(livre / dias_restantes, 2)
@@ -4477,6 +4502,15 @@ def resumo_orcamento(competencia: str | None = None) -> dict:
         "livre": round(previsto - gasto_com_teto - sum(l["comprometido"] for l in com_teto), 2),
         "percentual": round(gasto_com_teto / previsto * 100, 1) if previsto else 0.0,
         "projecao": projecao,
+        # O que saiu do hábito, independentemente de haver teto. Ordenado pelo
+        # tamanho do excesso: a pergunta é "onde o dinheiro vazou", e a resposta
+        # útil começa pelo maior vazamento.
+        "base_total": round(sum(l["base"] for l in linhas), 2),
+        "acima_da_base": sorted((l for l in linhas if l["acima_da_base"]),
+                                key=lambda l: -l["excesso_sobre_base"]),
+        "excesso_sobre_base": round(sum(l["excesso_sobre_base"] for l in linhas), 2),
+        "vao_passar_da_base": sorted((l for l in linhas if l["vai_passar_da_base"]),
+                                     key=lambda l: -l["projecao"]),
         "renda": renda,
         # Quanto do que entra no mês já está planejado para sair.
         "percentual_da_renda": (round(previsto / renda["total"] * 100, 1)
@@ -4497,9 +4531,10 @@ def plano_sugerido(competencia: str | None = None, meses: int = MESES_BASE_ORCAM
                    folga_pct: float = 10.0) -> dict:
     """Propõe quanto gastar em cada categoria para o mês caber na renda.
 
-    A base é o **mês anterior**: o retrato mais próximo de como você vive agora.
-    O que já está contratado (conta fixa, boleto lançado) não entra na conta de
-    corte — ele é piso, não escolha.
+    A base são os **três meses fechados mais recentes**, e dentro deles o mês
+    mais barato de cada categoria: não é um número inventado para apertar, é um
+    valor que já aconteceu — logo, cabe. O que já está contratado (conta fixa,
+    boleto lançado) não entra na conta de corte — ele é piso, não escolha.
 
     Quando nem o mínimo cabe na renda, o plano corta os variáveis na mesma
     proporção e avisa que o buraco é estrutural.
@@ -4590,10 +4625,10 @@ def aplicar_plano_sugerido(competencia: str | None = None, so_este_mes: bool = F
 
 def sugerir_orcamento(conta_id: int, meses: int = MESES_BASE_ORCAMENTO,
                       metodo: str = "mediana") -> float:
-    """Teto sugerido para a categoria, a partir do mês anterior.
+    """Teto sugerido para a categoria, a partir dos meses fechados mais recentes.
 
-    Com mais de um mês de base, a mediana é quem manda: a média sozinha é
-    distorcida por um mês atípico.
+    A mediana é quem manda: a média sozinha é distorcida por um mês atípico, e
+    um teto nascido de um mês atípico não é teto, é desculpa.
     """
     historico = _historico_da_categoria(conta_id, mes_atual(), meses)
     valor = historico["media"] if metodo == "media" else historico["mediana"]

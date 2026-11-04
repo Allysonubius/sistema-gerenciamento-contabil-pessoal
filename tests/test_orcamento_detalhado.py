@@ -127,8 +127,13 @@ def meses_anteriores(sistema, quantos: int) -> list[str]:
     return list(reversed(meses))
 
 
-def test_sugestao_usa_o_mes_passado(sistema, contas):
-    """O retrato mais próximo da vida de agora é o mês que acabou."""
+def test_sugestao_usa_a_mediana_de_tres_meses(sistema, contas):
+    """Um mês só não distingue hábito de acidente.
+
+    Os três meses fechados mais recentes aqui são 210, 2.000 e 190. O valor do
+    meio é 210: o mês do conserto não vira o teto do ano, e o mês magro não
+    vira promessa de que dali em diante se gasta pouco.
+    """
     valores = [200.0, 210.0, 2000.0, 190.0]
     for competencia, valor in zip(meses_anteriores(sistema, 4), valores):
         sistema.salvar_lancamento(
@@ -136,7 +141,7 @@ def test_sugestao_usa_o_mes_passado(sistema, contas):
             [sistema.Partida(contas["despesa"], "D", valor),
              sistema.Partida(contas["banco"], "C", valor)])
 
-    assert sistema.sugerir_orcamento(contas["despesa"]) == 190.0      # o último mês
+    assert sistema.sugerir_orcamento(contas["despesa"]) == 210.0
 
 
 def test_com_janela_maior_a_mediana_segura_o_mes_atipico(sistema, contas):
@@ -154,7 +159,7 @@ def test_com_janela_maior_a_mediana_segura_o_mes_atipico(sistema, contas):
     assert media > 600.0
 
 
-def test_mostra_o_gasto_do_mes_passado_e_se_estourou(sistema, contas):
+def test_a_base_vem_dos_tres_meses_e_conta_os_estouros(sistema, contas):
     sistema.definir_orcamento(contas["despesa"], 100.0)
     for competencia, valor in zip(meses_anteriores(sistema, 3), (300.0, 50.0, 400.0)):
         sistema.salvar_lancamento(
@@ -164,8 +169,10 @@ def test_mostra_o_gasto_do_mes_passado_e_se_estourou(sistema, contas):
 
     linha = next(l for l in sistema.orcamento_do_mes()
                  if l["conta_id"] == contas["despesa"])
-    assert linha["mediana_historica"] == 400.0      # o mês passado
-    assert linha["estouros_anteriores"] == 1        # e ele estourou o teto
+    assert linha["base"] == 300.0                   # o valor do meio entre 50, 300 e 400
+    assert linha["piso_historico"] == 50.0          # o mês mais barato que já aconteceu
+    assert linha["topo_historico"] == 400.0
+    assert linha["estouros_anteriores"] == 2        # 300 e 400 passaram; 50 não
 
 
 def test_sem_historico_nao_inventa_teto(sistema, contas):
@@ -265,15 +272,17 @@ def historico_variado(sistema, contas):
     return contas["despesa"]
 
 
-def test_plano_parte_do_mes_passado(sistema, contas, mes, historico_variado):
+def test_plano_parte_do_mes_mais_barato(sistema, contas, mes, historico_variado):
     salario = sistema.salvar_titulo(None, "RECEBER", "Salário", "", 3000.0, f"{mes}-05",
                                     contas["receita"], None)
     sistema.baixar_titulo(salario, f"{mes}-05", 3000.0, contas["banco"])
 
     plano = sistema.plano_sugerido()
     linha = next(l for l in plano["categorias"] if l["conta_id"] == historico_variado)
-    assert linha["minimo"] == 300.0           # o mês que acabou, não meio ano atrás
-    assert linha["sugerido"] == 300.0
+    # Entre 400, 150 e 300, a meta é 150: não é um número inventado para
+    # apertar, é um mês que de fato aconteceu — logo, cabe.
+    assert linha["minimo"] == 150.0
+    assert linha["sugerido"] == 150.0
     assert plano["aperta"] is False
 
 
@@ -284,9 +293,9 @@ def test_plano_mostra_a_fatia_da_renda(sistema, contas, mes, historico_variado):
 
     plano = sistema.plano_sugerido()
     linha = next(l for l in plano["categorias"] if l["conta_id"] == historico_variado)
-    assert linha["percentual_renda"] == 20.0  # 300 de 1.500
-    assert plano["percentual_da_renda"] == 20.0
-    assert plano["sobra"] == 1200.0
+    assert linha["percentual_renda"] == 10.0  # 150 de 1.500
+    assert plano["percentual_da_renda"] == 10.0
+    assert plano["sobra"] == 1350.0
 
 
 def test_conta_fixa_do_mes_e_piso_do_plano(sistema, contas, mes, historico_variado):
@@ -324,11 +333,16 @@ def test_aplicar_plano_grava_os_tetos(sistema, contas, mes, historico_variado):
 
     assert quantas >= 1
     teto, _ = sistema.teto_da_categoria(historico_variado, mes)
-    assert teto == 300.0
+    assert teto == 150.0
 
 
-def test_plano_do_mes_seguinte_olha_o_mes_atual(sistema, contas, mes, historico_variado):
-    """Para planejar novembro, o espelho é outubro — não o semestre inteiro."""
+def test_plano_do_mes_seguinte_anda_com_a_janela(sistema, contas, mes, historico_variado):
+    """A janela anda: para planejar o mês que vem, o mais antigo sai dela.
+
+    O histórico é 400, 150 e 300, e este mês fecha com 250. Planejando o mês
+    seguinte, os três meses que valem são 150, 300 e 250 — o 400 ficou para
+    trás e deixa de pesar.
+    """
     gastar(sistema, contas, 250.0, 8)         # o gasto deste mês
     seguinte = sistema._mes_seguinte(mes)
     sistema.salvar_titulo(None, "RECEBER", "Salário", "", 5000.0, f"{seguinte}-05",
@@ -337,7 +351,8 @@ def test_plano_do_mes_seguinte_olha_o_mes_atual(sistema, contas, mes, historico_
     plano = sistema.plano_sugerido(seguinte)
     linha = next(l for l in plano["categorias"] if l["conta_id"] == historico_variado)
     assert plano["renda"] == 5000.0
-    assert linha["sugerido"] == 250.0
+    assert linha["minimo"] == 150.0
+    assert linha["sugerido"] == 150.0
     assert plano["aperta"] is False
 
 

@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 708 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 719 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -178,10 +178,45 @@ Essas duas abas percorrem todo o histórico e ignoram o seletor de período.
 
 Cada categoria de despesa pode ter um **teto mensal** (`orcamento`). O teto vale para todos
 os meses; um mês atípico pode receber um **ajuste pontual** sem alterar os demais.
-"Sugerir pela média" preenche os tetos com a média dos últimos 3 meses.
+"Sugerir pelo histórico" preenche os tetos de uma vez.
 
-A tela mostra, por categoria: quanto já foi gasto, quanto ainda pode, **quanto dá por dia
-até o fim do mês** e o **ritmo** — a projeção do gasto no mês mantido o ritmo atual, que
+### A base de gasto
+
+O orçamento se guia pelos **três meses fechados mais recentes**, e dentro deles pelo
+**valor do meio** de cada categoria — a mediana, não a média.
+
+Um mês só é um retrato, e retrato não distingue hábito de acidente: o mês do conserto do
+carro virava o teto do ano, e o mês de férias virava a promessa de que dali em diante se
+gasta pouco. Três meses separam as duas coisas e ainda falam da vida de agora — olhar meio
+ano para trás traz valores de uma realidade que já mudou. A média fica de fora pelo mesmo
+motivo: basta um mês atípico para ela mentir.
+
+A janela anda com o tempo. Ao planejar o mês que vem, o mais antigo dos três sai da conta.
+
+### O custo que extrapolou
+
+A coluna **Passou da base** diz quanto a categoria gastou acima do que costuma gastar, e o
+recado no alto soma tudo e começa pelo maior vazamento — a pergunta é "onde o dinheiro
+vazou", e a resposta útil não começa pelo centavo.
+
+Isso vale **mesmo onde nunca se definiu um teto**, que é justamente onde o gasto crescia
+sem ninguém notar: sem teto não havia régua nenhuma, e a categoria podia dobrar em silêncio.
+Categoria nova não é acusada de nada — sem histórico não há base, e sem base não há do que
+acusar ninguém.
+
+O aviso vem antes do estouro: mantido o ritmo do mês, as categorias que **vão** passar da
+base aparecem enquanto ainda dá para mudar. Avisar depois é tarde — a conta já foi.
+
+### O plano enxuto
+
+"Aplicar plano enxuto" propõe, para cada categoria, o **mês mais barato dos três** — não um
+número inventado para apertar, mas um valor que já aconteceu, logo cabe. O que já está
+contratado (conta fixa, boleto lançado) é piso e não entra no corte. Quando nem o mínimo
+cabe na renda, o plano corta os variáveis na mesma proporção e avisa que o buraco é
+estrutural.
+
+A tela mostra ainda, por categoria: quanto já foi gasto, quanto ainda pode, **quanto dá por
+dia até o fim do mês** e o **ritmo** — a projeção do gasto no mês mantido o ritmo atual, que
 avisa do estouro antes de ele acontecer.
 
 **Objetivos** (`meta`) acompanham quanto já foi guardado em uma conta desde a criação da

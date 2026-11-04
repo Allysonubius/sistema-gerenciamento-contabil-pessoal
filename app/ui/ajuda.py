@@ -119,8 +119,12 @@ TOPICOS: list[tuple[str, str]] = [
 
     ("Orçamento: quanto posso gastar",
      "Na tela 'Orçamento' você define um teto mensal para cada categoria.\n\n"
-     "O botão 'Sugerir pela média' preenche tudo de uma vez, usando o que você\n"
-     "gastou nos últimos 3 meses — depois é só ajustar.\n\n"
+     "O botão 'Sugerir pelo histórico' preenche tudo de uma vez, usando o valor\n"
+     "do meio dos três meses fechados mais recentes — depois é só ajustar. O valor\n"
+     "do meio, e não a média, porque basta um mês atípico para a média mentir.\n\n"
+     "A coluna 'Passou da base' mostra o quanto a categoria gastou acima do que\n"
+     "costuma gastar. Ela vale mesmo onde você nunca definiu um teto — que é\n"
+     "justamente onde o gasto crescia sem ninguém notar.\n\n"
      "Durante o mês, a tela mostra quanto já foi, quanto ainda pode gastar e quanto\n"
      "dá por dia até o fim do mês. A coluna 'Ritmo do mês' avisa antes: se você\n"
      "continuar gastando nesse ritmo, vai estourar.\n\n"
