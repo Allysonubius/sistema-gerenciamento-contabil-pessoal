@@ -176,3 +176,6 @@ def marcar_zebra(tree) -> None:
     tree.tag_configure("vencido", foreground=CORES["perigo"])
     tree.tag_configure("quitado", foreground=CORES["texto_suave"])
     tree.tag_configure("destaque", background=CORES["primaria_suave"])
+    # Linha de algo desativado: continua legível, mas sem disputar atenção
+    # com o que ainda está em uso.
+    tree.tag_configure("inativa", foreground=CORES["texto_suave"], font=(FONTE, 10, "italic"))

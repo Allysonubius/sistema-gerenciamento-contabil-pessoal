@@ -6,8 +6,9 @@ from tkinter import messagebox, ttk
 
 from app import services
 from app.ui.theme import CORES, FONTE
-from app.ui.widgets import (BarraFiltro, Cabecalho, CampoData, CampoValor, Paginacao,
-                            SeletorConta, Tabela, centralizar)
+from app.ui.widgets import (BarraFiltro, Cabecalho, CampoData, CampoValor,
+                            FaixaPatrimonio, Paginacao, SeletorConta, Tabela,
+                            centralizar)
 
 
 class Carteiras(ttk.Frame):
@@ -33,23 +34,8 @@ class Carteiras(ttk.Frame):
         corpo.rowconfigure(2, weight=1)
 
         # --- totais -------------------------------------------------------
-        totais = ttk.Frame(corpo, style="Superficie.TFrame", padding=16)
-        totais.configure(relief="solid", borderwidth=1)
-        totais.grid(row=0, column=0, sticky="ew")
-        self.lbl_tem = ttk.Label(totais, style="Total.TLabel", background=CORES["superficie"])
-        self.lbl_tem.pack(side="left", padx=(0, 22))
-        self.lbl_investido = ttk.Label(totais, style="Total.TLabel",
-                                       background=CORES["superficie"])
-        self.lbl_investido.pack(side="left", padx=(0, 22))
-        self.lbl_outros = ttk.Label(totais, style="Total.TLabel",
-                                    background=CORES["superficie"])
-        self.lbl_outros.pack(side="left", padx=(0, 22))
-        self.lbl_deve = ttk.Label(totais, style="Total.TLabel", background=CORES["superficie"])
-        self.lbl_deve.pack(side="left", padx=(0, 22))
-        self.lbl_liquido = ttk.Label(totais, style="Total.TLabel", background=CORES["superficie"])
-        self.lbl_liquido.pack(side="left")
-        ttk.Label(totais, text="Só as contas marcadas como dinheiro somam no total.",
-                  style="DicaSuperficie.TLabel").pack(side="right")
+        self.faixa = FaixaPatrimonio(corpo)
+        self.faixa.grid(row=0, column=0, sticky="ew")
 
         # --- filtro de período -------------------------------------------
         filtros = ttk.Frame(corpo, style="Superficie.TFrame", padding=14)
@@ -119,21 +105,7 @@ class Carteiras(ttk.Frame):
                 iid=item["id"], tags=tags)
         self.tabela.finalizar()
 
-        totais = services.total_disponivel()
-        self.lbl_tem.configure(text=f"Dinheiro: {services.moeda(totais['tem'])}",
-                               foreground=CORES["sucesso"])
-        self.lbl_investido.configure(
-            text=f"Investido: {services.moeda(totais['investido'])}",
-            foreground=CORES["texto"] if totais["investido"] > 0.005 else CORES["texto_suave"])
-        self.lbl_outros.configure(
-            text=f"Outros saldos: {services.moeda(totais['outros'])}",
-            foreground=CORES["texto"] if totais["outros"] > 0.005 else CORES["texto_suave"])
-        self.lbl_deve.configure(text=f"Deve: {services.moeda(totais['deve'])}",
-                                foreground=CORES["perigo"] if totais["deve"] > 0.005
-                                else CORES["texto_suave"])
-        self.lbl_liquido.configure(
-            text=f"Sobra: {services.moeda(totais['liquido'])}",
-            foreground=CORES["sucesso"] if totais["liquido"] >= 0 else CORES["perigo"])
+        self.faixa.recarregar()
 
     def _selecionada(self) -> int | None:
         item = self.tabela.selecionado()

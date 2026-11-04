@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 695 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 708 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -438,6 +438,23 @@ uma, com as que não cobrem o que sai delas em primeiro lugar.
 Quais contas valem como saldo é escolha sua: em **Minhas Contas**, cada conta pode ser
 ligada ou desligada do dinheiro disponível. Só as ligadas entram nessas somas — o
 saldo das outras continua visível na lista, mas não conta como dinheiro para pagar.
+
+No alto da tela fica o mesmo retrato que **Minhas Contas** mostra: *Dinheiro*,
+*Investido*, *Outros saldos*, *Deve* e *Sobra*. A pergunta de Contas a Pagar não é
+"quanto devo", é "dá para pagar" — e sem o saldo à vista a lista responde só metade.
+O cálculo é um só, escrito uma vez: duas cópias viram, com o tempo, dois números
+diferentes para a mesma pergunta.
+
+## Aplicação que acabou
+
+Em **Investimentos**, *Desativar* tira a aplicação do dia a dia sem apagar nada: o
+saldo e o histórico continuam, e *Reativar* devolve tudo. O botão lê a linha escolhida
+e diz o que vai acontecer com ela.
+
+A lista separa o que está em uso do que já foi encerrado — *Ativas*, *Inativas* ou
+*Todas*, com as ativas primeiro. Desativar sem caminho de volta seria apagar com outro
+nome; por isso o encerramento só oferece *apagar de vez* para a aplicação zerada e
+nunca usada, onde não há passado a perder.
 
 ## Mudar a data de uma conta
 

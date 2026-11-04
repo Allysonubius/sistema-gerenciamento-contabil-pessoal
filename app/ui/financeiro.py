@@ -9,8 +9,8 @@ from app import db, services
 from app.ui import perguntas
 from app.ui.theme import CORES, FONTE
 from app.ui.widgets import (AreaRolavel, AutoConsulta, Cabecalho, CampoData,
-                            CampoValor, Paginacao, SeletorConta, Tabela,
-                            centralizar)
+                            CampoValor, FaixaPatrimonio, Paginacao, SeletorConta,
+                            Tabela, centralizar)
 
 ROTULO_STATUS = {"ABERTO": "Em aberto", "QUITADO": "Já pago", "CANCELADO": "Cancelada"}
 
@@ -46,6 +46,14 @@ class Financeiro(ttk.Frame):
 
         corpo = ttk.Frame(self, padding=(24, 18))
         corpo.pack(fill="both", expand=True)
+
+        # O retrato do dinheiro vem antes da lista de propósito: a pergunta
+        # desta tela não é "quanto devo", é "dá para pagar". Sem o saldo à
+        # vista, a lista responde só metade.
+        self.faixa = FaixaPatrimonio(
+            corpo, "Investido e outros saldos não entram em 'Sobra':"
+                   " é dinheiro que existe, mas não está à mão.")
+        self.faixa.pack(fill="x", pady=(0, 12))
 
         filtros = ttk.Frame(corpo, style="Superficie.TFrame", padding=14)
         filtros.configure(relief="solid", borderwidth=1)
@@ -492,6 +500,7 @@ class Financeiro(ttk.Frame):
         self.lbl_entrou.configure(text=f"Entrou: {services.moeda(total_entrou)}",
                                   foreground=CORES["sucesso"])
         self._mostrar_caixa(linhas)
+        self.faixa.recarregar()
 
     def abrir_por_conta(self) -> None:
         """A visão conta a conta do que está na lista."""
@@ -499,8 +508,8 @@ class Financeiro(ttk.Frame):
                                self.lbl_periodo.cget("text").strip().lower())
 
     def _mostrar_caixa(self, linhas: list) -> None:
-        self._linhas = linhas
         """Diz se o dinheiro que existe cobre as contas que estão na lista."""
+        self._linhas = linhas
         caixa = services.caixa_para_as_contas(linhas)
         self.lbl_tenho.configure(
             text=f"Tenho em conta: {services.moeda(caixa['tem'])}",

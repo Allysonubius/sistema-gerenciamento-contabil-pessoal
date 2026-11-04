@@ -1660,13 +1660,19 @@ def eh_investimento(conta: db.sqlite3.Row) -> bool:
 CONTAS_GENERICAS_DE_INVESTIMENTO = ("1.1.05", "1.2.01")
 
 
-def listar_investimentos() -> list[dict]:
-    """Cada aplicação com aportes, resgates, rendimento e rentabilidade."""
+def listar_investimentos(incluir_inativas: bool = False) -> list[dict]:
+    """Cada aplicação com aportes, resgates, rendimento e rentabilidade.
+
+    Por padrão só as ativas, porque são elas que somam no patrimônio. A tela de
+    Investimentos pede as inativas à parte: a aplicação encerrada não some do
+    mundo, e quem a desativou precisa conseguir achá-la para reativar.
+    """
     conta_rendimento = db.query_one("SELECT id FROM conta WHERE codigo = ?",
                                     (CONTA_RENDIMENTO,))
+    filtro_ativo = "" if incluir_inativas else " AND ativo=1"
     saida = []
     for conta in db.query("SELECT * FROM conta WHERE tipo='ATIVO' AND aceita_lancamento=1"
-                          " AND ativo=1 ORDER BY codigo"):
+                          f"{filtro_ativo} ORDER BY codigo"):
         if not eh_investimento(conta):
             continue
 
@@ -1711,6 +1717,7 @@ def listar_investimentos() -> list[dict]:
             "saldo": saldo,
             "rentabilidade": round(rendimento / aportes * 100, 2) if aportes > CENTAVO else 0.0,
             "ultimo_movimento": ultimo["d"] if ultimo else None,
+            "ativa": bool(conta["ativo"]),
         })
     return saida
 

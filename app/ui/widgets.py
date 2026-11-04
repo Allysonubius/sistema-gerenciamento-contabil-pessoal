@@ -1313,3 +1313,46 @@ def rotulo_campo(master, texto: str, dica: str = "", fundo_branco: bool = False)
         ttk.Label(quadro, text=dica,
                   style="DicaSuperficie.TLabel" if fundo_branco else "Dica.TLabel").pack(anchor="w")
     return quadro
+
+
+class FaixaPatrimonio(ttk.Frame):
+    """Dinheiro, investido, outros saldos, dívida e sobra — numa linha só.
+
+    O mesmo retrato aparece em mais de uma tela. Ele mora aqui, e não copiado
+    em cada uma, porque duas cópias do mesmo cálculo viram, com o tempo, dois
+    números diferentes para a mesma pergunta.
+    """
+
+    def __init__(self, master, dica: str = "Só as contas marcadas como dinheiro"
+                                            " somam no total."):
+        super().__init__(master, style="Superficie.TFrame", padding=16)
+        self.configure(relief="solid", borderwidth=1)
+        self._rotulos: dict[str, ttk.Label] = {}
+        for chave in ("tem", "investido", "outros", "deve", "liquido"):
+            rotulo = ttk.Label(self, style="Total.TLabel",
+                               background=CORES["superficie"])
+            rotulo.pack(side="left", padx=(0, 22 if chave != "liquido" else 0))
+            self._rotulos[chave] = rotulo
+        if dica:
+            ttk.Label(self, text=dica, style="DicaSuperficie.TLabel").pack(side="right")
+
+    def recarregar(self, totais: dict | None = None) -> dict:
+        """Atualiza os números e devolve os totais usados."""
+        totais = totais if totais is not None else services.total_disponivel()
+        suave = CORES["texto_suave"]
+        self._rotulos["tem"].configure(
+            text=f"Dinheiro: {services.moeda(totais['tem'])}",
+            foreground=CORES["sucesso"] if totais["tem"] > 0.005 else suave)
+        self._rotulos["investido"].configure(
+            text=f"Investido: {services.moeda(totais['investido'])}",
+            foreground=CORES["texto"] if totais["investido"] > 0.005 else suave)
+        self._rotulos["outros"].configure(
+            text=f"Outros saldos: {services.moeda(totais['outros'])}",
+            foreground=CORES["texto"] if totais["outros"] > 0.005 else suave)
+        self._rotulos["deve"].configure(
+            text=f"Deve: {services.moeda(totais['deve'])}",
+            foreground=CORES["perigo"] if totais["deve"] > 0.005 else suave)
+        self._rotulos["liquido"].configure(
+            text=f"Sobra: {services.moeda(totais['liquido'])}",
+            foreground=CORES["sucesso"] if totais["liquido"] >= 0 else CORES["perigo"])
+        return totais

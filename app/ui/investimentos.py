@@ -47,6 +47,23 @@ class JanelaInvestimentos(tk.Toplevel):
         # Aplicação que acabou precisa sair da lista sem levar o passado junto.
         ttk.Button(acoes, text="Encerrar aplicação", style="Perigo.TButton",
                    command=self.encerrar).pack(side="right", padx=8)
+        # Um botão só, que lê a linha escolhida: desativar e reativar são o
+        # mesmo gesto visto de dois lados, e dois botões deixariam um deles
+        # sempre inútil na tela.
+        self.btn_ativa = ttk.Button(acoes, text="Desativar", command=self.alternar_ativa)
+        self.btn_ativa.pack(side="right")
+
+        # --- o que mostrar ------------------------------------------------
+        filtro = ttk.Frame(corpo)
+        filtro.pack(fill="x", pady=(0, 10))
+        ttk.Label(filtro, text="Mostrar:", style="Campo.TLabel").pack(side="left")
+        self.var_mostrar = tk.StringVar(value="ativas")
+        for rotulo, valor in (("Ativas", "ativas"), ("Inativas", "inativas"),
+                              ("Todas", "todas")):
+            ttk.Radiobutton(filtro, text=rotulo, value=valor, variable=self.var_mostrar,
+                            command=self.recarregar).pack(side="left", padx=(10, 0))
+        self.lbl_quantas = ttk.Label(filtro, style="Dica.TLabel")
+        self.lbl_quantas.pack(side="right")
 
         self.tabela = Tabela(corpo, [
             ("nome", "Aplicação", 200, "w"),
@@ -56,11 +73,14 @@ class JanelaInvestimentos(tk.Toplevel):
             ("saldo", "Tem hoje", 130, "e"),
             ("rent", "Rentabilidade", 120, "e"),
             ("ultimo", "Último movimento", 130, "center"),
+            ("situacao", "Situação", 100, "center"),
         ], on_duplo_clique=lambda _i: self.ver_extrato(), altura=8)
         self.tabela.definir_texto_vazio(
             "Nenhuma aplicação ainda. Use 'Nova aplicação' ou 'Usar conta existente'"
             " para acompanhar seus investimentos.")
         self.tabela.pack(fill="both", expand=True)
+        self.tabela.tree.bind("<<TreeviewSelect>>",
+                              lambda _e: self._ajustar_botao_ativa(), add="+")
 
         self.lbl_evolucao = ttk.Label(corpo, style="Dica.TLabel", justify="left")
         self.lbl_evolucao.pack(anchor="w", pady=(10, 0))
@@ -78,19 +98,39 @@ class JanelaInvestimentos(tk.Toplevel):
 
     # ------------------------------------------------------------------ #
     def recarregar(self) -> None:
+        mostrar = self.var_mostrar.get()
+        itens = services.listar_investimentos(incluir_inativas=True)
+        ativas = [i for i in itens if i["ativa"]]
+        inativas = [i for i in itens if not i["ativa"]]
+        # Em "Todas", as ativas vêm primeiro: a lista continua respondendo
+        # "onde está meu dinheiro hoje" na primeira olhada, com o que já foi
+        # encerrado logo abaixo.
+        visiveis = {"ativas": ativas, "inativas": inativas,
+                    "todas": ativas + inativas}[mostrar]
+
         self.tabela.limpar()
-        for item in services.listar_investimentos():
+        for item in visiveis:
             cor = ("positivo" if item["rendimento"] > 0.005
                    else "negativo" if item["rendimento"] < -0.005 else "")
+            tags = ("inativa",) if not item["ativa"] else ((cor,) if cor else ())
             self.tabela.inserir(
                 (item["nome"], item["instituicao"] or "—",
                  services.moeda(item["aplicado"]),
                  services.moeda(item["rendimento"]),
                  services.moeda(item["saldo"]),
                  f"{item['rentabilidade']:.2f}%" if item["aportes"] > 0.005 else "—",
-                 services.para_br(item["ultimo_movimento"]) if item["ultimo_movimento"] else "—"),
-                iid=item["id"], tags=(cor,) if cor else ())
+                 services.para_br(item["ultimo_movimento"]) if item["ultimo_movimento"] else "—",
+                 "Ativa" if item["ativa"] else "Inativa"),
+                iid=item["id"], tags=tags)
+        self.tabela.definir_texto_vazio(
+            {"ativas": "Nenhuma aplicação ativa. Use 'Nova aplicação' ou 'Usar conta"
+                       " existente' para acompanhar seus investimentos.",
+             "inativas": "Nenhuma aplicação desativada.",
+             "todas": "Nenhuma aplicação ainda."}[mostrar])
         self.tabela.finalizar()
+        self.lbl_quantas.configure(
+            text=f"{len(ativas)} ativa(s)  ·  {len(inativas)} inativa(s)")
+        self._ajustar_botao_ativa()
 
         r = services.resumo_investimentos()
         self.lbl_totais.configure(
@@ -107,6 +147,54 @@ class JanelaInvestimentos(tk.Toplevel):
                     for e in evolucao))
         else:
             self.lbl_evolucao.configure(text="")
+
+    def _ajustar_botao_ativa(self) -> None:
+        """O botão diz o que vai acontecer com a linha escolhida."""
+        item = self.tabela.selecionado()
+        ativa = True
+        if item:
+            conta = services.obter_conta(int(item))
+            ativa = bool(conta["ativo"]) if conta else True
+        self.btn_ativa.configure(text="Desativar" if ativa else "Reativar")
+
+    def alternar_ativa(self) -> None:
+        """Desativa a aplicação escolhida — ou devolve ao uso a que está parada.
+
+        Desativar não apaga nada: saldo e histórico continuam, e por isso é o
+        caminho seguro para a aplicação que acabou. O que some é a presença
+        dela nos seletores e nas somas do dia a dia.
+        """
+        conta_id = self._selecionada()
+        if conta_id is None:
+            return
+        conta = services.obter_conta(conta_id)
+        ativa = bool(conta["ativo"])
+        if ativa:
+            saldo = services.saldo_conta(conta_id)
+            aviso = (f"'{conta['nome']}' ainda tem {services.moeda(saldo)} aplicados."
+                     " O saldo continua guardado, mas a aplicação sai das somas do dia a"
+                     " dia até ser reativada." if abs(saldo) > 0.005 else
+                     f"'{conta['nome']}' sai dos seletores e das somas. O histórico fica"
+                     " guardado e dá para reativar aqui mesmo.")
+            escolha = perguntas.escolher(
+                self, "Desativar aplicação", aviso,
+                [("Deixar como está", "Nada muda.", "nada"),
+                 ("Desativar", "Some das listas do dia a dia; nada é apagado.", "sim")])
+            if escolha != "sim":
+                return
+        try:
+            services.definir_conta_ativa(conta_id, not ativa)
+        except services.RegraNegocioError as erro:
+            perguntas.avisar(self, "Não foi possível", str(erro))
+            return
+        if not ativa:
+            # Quem acabou de reativar quer ver o resultado, e o filtro em
+            # "Inativas" esconderia justamente a linha que mudou.
+            self.var_mostrar.set("ativas")
+        self._apos()
+        perguntas.avisar(self, "Pronto",
+                         f"'{conta['nome']}' foi desativada." if ativa else
+                         f"'{conta['nome']}' voltou para a lista de aplicações ativas.")
 
     def _selecionada(self) -> int | None:
         item = self.tabela.selecionado()
