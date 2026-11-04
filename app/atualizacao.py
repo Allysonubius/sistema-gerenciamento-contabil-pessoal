@@ -14,7 +14,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from app.config import APP_VERSION
 
@@ -34,9 +34,14 @@ REPOSITORIO = "Allysonubius/sistema-gerenciamento-contabil-pessoal"
 URL_ULTIMA = f"https://api.github.com/repos/{REPOSITORIO}/releases/latest"
 URL_RELEASES = f"https://github.com/{REPOSITORIO}/releases"
 
-# Uma consulta por dia basta. O limite da API sem autenticação é de 60 por
-# hora por IP, então sobra folga até para quem abre o programa o dia inteiro.
-HORAS_ENTRE_CONSULTAS = 24
+# Consulta a cada abertura. Já esperou um dia inteiro entre uma consulta e
+# outra, e o efeito era o contrário do pretendido: quem abria a ferramenta
+# logo depois de uma versão sair continuava na versão velha sem saber, e
+# "espere até amanhã" não é resposta para uma atualização obrigatória. A
+# consulta roda em linha separada e falha em silêncio, então o custo de
+# repeti-la é nenhum; o limite da API sem autenticação (60 por hora por IP)
+# sobra de longe para um programa que pergunta uma vez por abertura e uma vez
+# a cada virada de dia.
 TEMPO_LIMITE_S = 8
 
 
@@ -80,13 +85,13 @@ def ultima_consulta() -> datetime | None:
 
 
 def esta_na_hora() -> bool:
-    """Já passou tempo suficiente desde a última consulta?"""
-    if not verificacao_ligada():
-        return False
-    anterior = ultima_consulta()
-    if anterior is None:
-        return True
-    return datetime.now() - anterior >= timedelta(hours=HORAS_ENTRE_CONSULTAS)
+    """Vale a pena perguntar ao GitHub agora?
+
+    Sempre que a verificação estiver ligada. Não há intervalo a cumprir: a
+    marca da última consulta vira registro do que aconteceu, não tranca da
+    próxima.
+    """
+    return verificacao_ligada()
 
 
 # A última falha da consulta, em linguagem de gente. Fica aqui porque "não

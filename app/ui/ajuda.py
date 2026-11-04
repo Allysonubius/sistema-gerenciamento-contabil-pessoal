@@ -210,7 +210,7 @@ TOPICOS: list[tuple[str, str]] = [
      "em separado, se os seus registros tamb\u00e9m devem ser apagados."),
 
     ("Saber quando sai uma vers\u00e3o nova",
-     "Uma vez por dia o programa pergunta ao GitHub se saiu vers\u00e3o nova. Havendo,\n"
+     "A cada abertura o programa pergunta ao GitHub se saiu vers\u00e3o nova. Havendo,\n"
      "aparece uma faixa no topo da janela e um aviso perto do rel\u00f3gio.\n\n"
      "Clique em 'Ver o que mudou': abre uma janela aqui mesmo, sem navegador,\n"
      "contando o que a vers\u00e3o nova traz. O bot\u00e3o 'Baixar e atualizar' faz o resto \u2014\n"

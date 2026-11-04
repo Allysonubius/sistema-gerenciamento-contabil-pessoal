@@ -284,7 +284,7 @@ class Configuracoes(ttk.Frame):
                                      command=self.abrir_versao_nova)
         self.btn_baixar.pack(side="left", padx=8)
         ttk.Label(acoes_versao,
-                  text="O programa confere sozinho uma vez por dia. Atualizar não é"
+                  text="O programa confere sozinho a cada abertura. Atualizar não é"
                        " opcional: a versão nova precisa ser instalada para continuar.",
                   style="DicaSuperficie.TLabel", wraplength=520,
                   justify="left").pack(side="left", padx=16)

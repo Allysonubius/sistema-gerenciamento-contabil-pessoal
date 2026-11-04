@@ -105,13 +105,20 @@ def test_o_que_foi_visto_fica_guardado(sistema, rede):
     assert atualizacao.estado_guardado()["ha_novidade"] is True
 
 
-def test_nao_pergunta_duas_vezes_no_mesmo_dia(sistema, rede):
+def test_pergunta_de_novo_a_cada_abertura(sistema, rede):
+    """Esperar um dia entre consultas deixava a pessoa na versão velha sem saber.
+
+    A atualização é obrigatória; "espere até amanhã para descobrir" não é
+    resposta. A marca da última consulta continua sendo gravada — ela é
+    registro do que aconteceu, não tranca da próxima.
+    """
     rede({"versao": "99.0.0", "pagina": "p", "nome": "", "notas": "", "arquivo": "",
           "tamanho": 0, "publicada_em": ""})
     assert atualizacao.esta_na_hora() is True
     atualizacao.verificar(forcar=True)
 
-    assert atualizacao.esta_na_hora() is False
+    assert atualizacao.esta_na_hora() is True
+    assert atualizacao.ultima_consulta() is not None, "a marca fica registrada"
 
 
 def test_desligar_a_verificacao(sistema):

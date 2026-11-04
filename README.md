@@ -338,8 +338,11 @@ janela for chamada de volta do relógio.
 
 ## Aviso de versão nova
 
-Uma vez por dia, numa linha separada para não segurar a abertura, o programa pergunta à
-API pública de releases do GitHub se saiu versão nova. Sem token, sem cadastro, sem
+A cada abertura, numa linha separada para não segurar a tela, o programa pergunta à
+API pública de releases do GitHub se saiu versão nova. Já houve um intervalo de 24 horas
+entre uma consulta e outra, e o efeito era o contrário do pretendido: quem abria logo
+depois de uma versão sair continuava na versão velha sem saber — e "espere até amanhã"
+não é resposta para uma atualização obrigatória. Sem token, sem cadastro, sem
 telemetria: a única coisa que sai daqui é a pergunta "qual é a última versão".
 
 Havendo novidade, **uma janela se abre** contando o que mudou — tarja no alto da tela
