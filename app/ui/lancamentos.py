@@ -378,26 +378,36 @@ class DialogoMovimento(tk.Toplevel):
     def _quadro(self) -> ttk.Frame:
         return ttk.Frame(self.notebook, style="Superficie.TFrame", padding=20)
 
-    def _campo(self, pai, linha: int, titulo: str, dica: str, widget) -> None:
+    def _campo(self, pai, linha: int, titulo: str, dica: str, widget) -> int:
+        """Rótulo, dica e campo. Devolve a primeira linha livre depois deles.
+
+        Devolve em vez de deixar a conta por fora porque a conta por fora
+        errava: dois quadros desta janela tinham campo escrito por cima de
+        campo, e quem lesse o código não via, porque o número da linha vinha
+        solto em cada chamada.
+        """
         ttk.Label(pai, text=titulo, style="CampoSuperficie.TLabel").grid(
             row=linha, column=0, sticky="w", pady=(0, 2))
         ttk.Label(pai, text=dica, style="DicaSuperficie.TLabel").grid(
             row=linha + 1, column=0, sticky="w")
         widget.grid(row=linha + 2, column=0, sticky="w", pady=(4, 2))
+        return linha + 3
 
-    def _com_saldo(self, pai, linha: int, seletor, sinal: int) -> None:
+    def _com_saldo(self, pai, linha: int, seletor, sinal: int) -> int:
         """Mostra o saldo da conta escolhida logo abaixo do seletor.
 
+        ``linha`` é a linha do próprio rótulo, e a devolvida é a próxima livre.
         ``sinal`` diz o que este registro faz com ela: -1 tira dinheiro,
         +1 põe, 0 só mostra o saldo de hoje. Em conta de onde o dinheiro sai, o
         saldo também é sugerido no valor — é o teto do que dá para gastar.
         """
         rotulo = ttk.Label(pai, style="SecaoSuperficie.TLabel")
-        rotulo.grid(row=linha + 3, column=0, columnspan=2, sticky="w", pady=(0, 10))
+        rotulo.grid(row=linha, column=0, columnspan=2, sticky="w", pady=(0, 10))
         self._saldos.append((seletor, rotulo, sinal))
         seletor.bind("<<ComboboxSelected>>",
                      lambda _e, s=seletor, i=sinal: self._conta_escolhida(s, i), add="+")
         seletor.bind("<KeyRelease>", lambda _e: self._atualizar_saldos(), add="+")
+        return linha + 1
 
     def _conta_escolhida(self, seletor, sinal: int) -> None:
         """Trocou de conta: o campo recomeça com o saldo da conta escolhida.
@@ -474,51 +484,57 @@ class DialogoMovimento(tk.Toplevel):
     def _aba_gasto(self) -> ttk.Frame:
         aba = self._quadro()
         self.sel_gasto_cat = SeletorConta(aba, tipos=("DESPESA",), width=54)
-        self._campo(aba, 0, "Com o que você gastou?",
-                    "Ex.: Supermercado, Combustível, Aluguel.", self.sel_gasto_cat)
+        linha = self._campo(aba, 0, "Com o que você gastou?",
+                            "Ex.: Supermercado, Combustível, Aluguel.",
+                            self.sel_gasto_cat)
         self.sel_gasto_conta = SeletorConta(aba, tipos=CONTAS_DINHEIRO, width=54)
-        self._campo(aba, 3, "De onde saiu o dinheiro?",
-                    "Conta corrente, carteira, poupança ou cartão de crédito.",
-                    self.sel_gasto_conta)
-        self._com_saldo(aba, 3, self.sel_gasto_conta, -1)
+        linha = self._campo(aba, linha, "De onde saiu o dinheiro?",
+                            "Conta corrente, carteira, poupança ou cartão de crédito.",
+                            self.sel_gasto_conta)
+        self._com_saldo(aba, linha, self.sel_gasto_conta, -1)
         return aba
 
     def _aba_receita(self) -> ttk.Frame:
         aba = self._quadro()
         self.sel_rec_cat = SeletorConta(aba, tipos=("RECEITA",), width=54)
-        self._campo(aba, 0, "De onde veio o dinheiro?",
-                    "Ex.: Salário, Freelance, Aluguel recebido.", self.sel_rec_cat)
+        linha = self._campo(aba, 0, "De onde veio o dinheiro?",
+                            "Ex.: Salário, Freelance, Aluguel recebido.",
+                            self.sel_rec_cat)
         self.sel_rec_conta = SeletorConta(aba, tipos=("ATIVO",), width=54)
-        self._campo(aba, 3, "Onde o dinheiro entrou?",
-                    "Conta corrente, poupança, carteira digital — ou 'Dinheiro em mãos',"
-                    " quando o valor ficou em espécie com você.", self.sel_rec_conta)
-        self._com_saldo(aba, 3, self.sel_rec_conta, +1)
+        linha = self._campo(aba, linha, "Onde o dinheiro entrou?",
+                            "Conta corrente, poupança, carteira digital — ou 'Dinheiro"
+                            " em mãos',"
+                            " quando o valor ficou em espécie com você.",
+                            self.sel_rec_conta)
+        self._com_saldo(aba, linha, self.sel_rec_conta, +1)
         return aba
 
     def _aba_transferencia(self) -> ttk.Frame:
         aba = self._quadro()
         self.sel_tr_origem = SeletorConta(aba, tipos=CONTAS_DINHEIRO, width=54)
-        self._campo(aba, 0, "De qual conta saiu?", "A conta que ficou com menos dinheiro.",
-                    self.sel_tr_origem)
-        self._com_saldo(aba, 0, self.sel_tr_origem, -1)
+        linha = self._campo(aba, 0, "De qual conta saiu?",
+                            "A conta que ficou com menos dinheiro.", self.sel_tr_origem)
+        linha = self._com_saldo(aba, linha, self.sel_tr_origem, -1)
         self.sel_tr_destino = SeletorConta(aba, tipos=CONTAS_DINHEIRO, width=54)
-        self._campo(aba, 3, "Para qual conta foi?", "A conta que ficou com mais dinheiro.",
-                    self.sel_tr_destino)
-        self._com_saldo(aba, 3, self.sel_tr_destino, +1)
-        ttk.Label(aba, text="Transferência não é ganho nem gasto: seu total continua o mesmo.",
-                  style="DicaSuperficie.TLabel").grid(row=6, column=0, sticky="w")
+        linha = self._campo(aba, linha, "Para qual conta foi?",
+                            "A conta que ficou com mais dinheiro.", self.sel_tr_destino)
+        linha = self._com_saldo(aba, linha, self.sel_tr_destino, +1)
+        ttk.Label(aba,
+                  text="Transferência não é ganho nem gasto: seu total continua o mesmo.",
+                  style="DicaSuperficie.TLabel").grid(row=linha, column=0, sticky="w")
         return aba
 
     def _aba_saldo(self) -> ttk.Frame:
         aba = self._quadro()
         self.sel_saldo_conta = SeletorConta(aba, tipos=CONTAS_DINHEIRO, width=54)
-        self._campo(aba, 0, "Qual conta você quer acertar?",
-                    "Informe quanto já existe nela hoje — use só na primeira vez.",
-                    self.sel_saldo_conta)
-        self._com_saldo(aba, 0, self.sel_saldo_conta, 0)
-        ttk.Label(aba, text="Se for uma conta de dívida (cartão, financiamento), o valor entra"
-                            " como saldo devedor.",
-                  style="DicaSuperficie.TLabel").grid(row=3, column=0, sticky="w")
+        linha = self._campo(aba, 0, "Qual conta você quer acertar?",
+                            "Informe quanto já existe nela hoje — use só na primeira vez.",
+                            self.sel_saldo_conta)
+        linha = self._com_saldo(aba, linha, self.sel_saldo_conta, 0)
+        ttk.Label(aba,
+                  text="Se for uma conta de dívida (cartão, financiamento), o valor"
+                       " entra como saldo devedor.",
+                  style="DicaSuperficie.TLabel").grid(row=linha, column=0, sticky="w")
         return aba
 
     def _aba_avancada(self) -> ttk.Frame:

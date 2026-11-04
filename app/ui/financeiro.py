@@ -39,6 +39,7 @@ class Financeiro(ttk.Frame):
         self.cabecalho.botao("Corrigir", self.editar)
         # A conta que não foi paga no dia não some: ela passa a vencer noutro dia.
         self.btn_remarcar = self.cabecalho.botao("Mudar a data", self.remarcar)
+        self.cabecalho.botao("Dinheiro por conta", self.abrir_por_conta)
         # Conta fixa: liga e desliga a repetição direto daqui, que é onde se olha.
         self.btn_fixa = self.cabecalho.botao("Desativar", self.alternar_fixa)
         ttk.Separator(self).pack(fill="x")
@@ -212,6 +213,9 @@ class Financeiro(ttk.Frame):
         # O que já entrou no período: os outros três totais falam só do que falta.
         self.lbl_entrou = ttk.Label(totais, style="Total.TLabel", background=CORES["superficie"])
         self.lbl_entrou.pack(side="left")
+        # As linhas que a tela está mostrando, guardadas para o rodapé e para a
+        # visão por conta contarem sobre exatamente o que está à vista.
+        self._linhas: list = []
         self.var_atrasadas = tk.BooleanVar(value=True)
         ttk.Checkbutton(totais, text="Trazer as atrasadas dos meses anteriores",
                         variable=self.var_atrasadas, command=self.recarregar,
@@ -489,7 +493,13 @@ class Financeiro(ttk.Frame):
                                   foreground=CORES["sucesso"])
         self._mostrar_caixa(linhas)
 
+    def abrir_por_conta(self) -> None:
+        """A visão conta a conta do que está na lista."""
+        JanelaDinheiroPorConta(self, list(self._linhas),
+                               self.lbl_periodo.cget("text").strip().lower())
+
     def _mostrar_caixa(self, linhas: list) -> None:
+        self._linhas = linhas
         """Diz se o dinheiro que existe cobre as contas que estão na lista."""
         caixa = services.caixa_para_as_contas(linhas)
         self.lbl_tenho.configure(
@@ -3274,3 +3284,109 @@ class DialogoRemarcar(tk.Toplevel):
             recado += (f" Mais {resultado['seguintes']} mês(es) passaram para o dia"
                        f" {resultado['dia']}.")
         self.ao_salvar(recado)
+
+
+# --------------------------------------------------------------------------- #
+class JanelaDinheiroPorConta(tk.Toplevel):
+    """Conta a conta: quanto tem, quanto sai, quanto entra e como fica.
+
+    O rodapé responde "dá para pagar?". Esta janela responde a pergunta
+    seguinte, que é a que trava o pagamento na hora: *desta* conta, dá? O
+    dinheiro pode existir e estar no lugar errado.
+    """
+
+    def __init__(self, master, linhas: list, periodo: str = ""):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.title("Dinheiro por conta")
+        self.linhas = linhas
+
+        cabecalho = Cabecalho(
+            self, "Dinheiro por conta",
+            (f"As contas a pagar e a receber {periodo}, separadas pela conta de onde o"
+             " dinheiro sai ou entra." if periodo else
+             "Separadas pela conta de onde o dinheiro sai ou entra."))
+        cabecalho.pack(fill="x")
+        cabecalho.botao("Fechar", self.destroy)
+        ttk.Separator(self).pack(fill="x")
+
+        corpo = ttk.Frame(self, padding=(20, 16))
+        corpo.pack(fill="both", expand=True)
+
+        self.tabela = Tabela(corpo, [
+            ("conta", "Conta", 210, "w"),
+            ("onde", "Onde", 150, "w"),
+            ("saldo", "Tem hoje", 120, "e"),
+            ("sai", "Vai sair", 120, "e"),
+            ("entra", "Vai entrar", 120, "e"),
+            ("fica", "Fica depois", 130, "e"),
+            ("situacao", "Situação", 190, "w"),
+        ], largura_livre=True, altura=10)
+        self.tabela.definir_texto_vazio("Nenhuma conta de dinheiro cadastrada.")
+        self.tabela.pack(fill="both", expand=True)
+
+        self.var_todas = tk.BooleanVar(value=False)
+        ttk.Checkbutton(corpo, variable=self.var_todas, command=self.recarregar,
+                        text="Mostrar também as contas sem saldo e sem movimento").pack(
+            anchor="w", pady=(10, 0))
+
+        self.lbl_total = ttk.Label(corpo, style="Secao.TLabel")
+        self.lbl_total.pack(anchor="w", pady=(10, 0))
+        self.lbl_recado = ttk.Label(corpo, style="Dica.TLabel", wraplength=880,
+                                    justify="left")
+        self.lbl_recado.pack(anchor="w", pady=(6, 0))
+        self.lbl_fora = ttk.Label(corpo, style="Dica.TLabel", wraplength=880,
+                                  justify="left")
+        self.lbl_fora.pack(anchor="w", pady=(6, 0))
+
+        self.recarregar()
+        centralizar(self, 1060, 560)
+        self.grab_set()
+
+    # ------------------------------------------------------------------ #
+    def recarregar(self) -> None:
+        resumo = services.contas_para_pagamento(self.linhas)
+        self.tabela.limpar()
+        for conta in resumo["contas"]:
+            interessa = (conta["usada"] or abs(conta["saldo"]) > 0.005
+                         or self.var_todas.get())
+            if not interessa:
+                continue
+            if not conta["usada"]:
+                situacao, tags = "nada a pagar por ela", ()
+            elif conta["cobre"]:
+                situacao, tags = f"{conta['quantas']} conta(s) — tem saldo", ()
+            else:
+                situacao = f"faltam {services.moeda(conta['falta'])}"
+                tags = ("negativo",)
+            self.tabela.inserir(
+                (conta["nome"], conta["instituicao"] or "—",
+                 services.moeda(conta["saldo"]),
+                 services.moeda(conta["sai"]) if conta["sai"] else "—",
+                 services.moeda(conta["entra"]) if conta["entra"] else "—",
+                 services.moeda(conta["fica"]), situacao),
+                iid=str(conta["id"]), tags=tags)
+        self.tabela.finalizar()
+
+        self.lbl_total.configure(
+            text=f"Somando tudo:  tem {services.moeda(resumo['tem'])}"
+                 f"   ·   vai sair {services.moeda(resumo['sai'])}"
+                 f"   ·   vai entrar {services.moeda(resumo['entra'])}"
+                 f"   ·   fica {services.moeda(resumo['fica'])}",
+            foreground=CORES["sucesso"] if resumo["fica"] >= 0 else CORES["perigo"])
+        self.lbl_recado.configure(
+            text=services.recado_por_conta(resumo),
+            foreground=CORES["perigo"] if resumo["faltando"] else CORES["texto_suave"])
+
+        fora = []
+        if resumo["no_cartao"] > 0.005:
+            fora.append(f"{services.moeda(resumo['no_cartao'])} vão para o cartão e saem"
+                        " quando a fatura vencer")
+        if resumo["sem_conta"] > 0.005:
+            fora.append(f"{services.moeda(resumo['sem_conta'])} ainda sem conta escolhida")
+        if resumo["a_receber_sem_conta"] > 0.005:
+            fora.append(f"{services.moeda(resumo['a_receber_sem_conta'])} a receber sem"
+                        " conta escolhida")
+        self.lbl_fora.configure(
+            text=("Fora destas contas: " + "; ".join(fora) + "." if fora else
+                  "Tudo o que está na lista passa por estas contas."))

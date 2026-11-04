@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 672 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 695 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -426,8 +426,18 @@ consulta paralela: dois números para a mesma coisa na mesma tela confundem mais
 que ajudam.
 
 E o total pode cobrir e mesmo assim faltar numa conta específica — o dinheiro existe,
-só está no lugar errado, que é o que trava o Pix na hora. O rodapé nomeia essas
+só está no lugar errado, que é o que trava o pagamento na hora. O rodapé nomeia essas
 contas.
+
+### Dinheiro por conta
+
+O botão *Dinheiro por conta*, no cabeçalho, abre a visão conta a conta: **quanto tem
+hoje**, **quanto vai sair**, **quanto vai entrar** e **como fica depois** de cada
+uma, com as que não cobrem o que sai delas em primeiro lugar.
+
+Quais contas valem como saldo é escolha sua: em **Minhas Contas**, cada conta pode ser
+ligada ou desligada do dinheiro disponível. Só as ligadas entram nessas somas — o
+saldo das outras continua visível na lista, mas não conta como dinheiro para pagar.
 
 ## Mudar a data de uma conta
 

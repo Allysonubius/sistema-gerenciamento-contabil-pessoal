@@ -337,6 +337,19 @@ def definir_conta_dinheiro(conta_id: int, entra: bool) -> None:
                (1 if entra else 0, conta_id))
 
 
+def definir_conta_ativa(conta_id: int, ativa: bool) -> None:
+    """Liga ou desliga uma conta sem apagar nada.
+
+    Desativada, ela some dos seletores e das somas; o saldo e o histórico
+    continuam guardados, e reativar devolve tudo. É o caminho para a conta que
+    acabou mas cujo passado ainda explica os números de antes.
+    """
+    conta = obter_conta(conta_id)
+    if conta is None:
+        raise RegraNegocioError("Conta não encontrada.")
+    db.execute("UPDATE conta SET ativo = ? WHERE id = ?", (1 if ativa else 0, conta_id))
+
+
 def criar_carteira(nome: str, rotulo_tipo: str, instituicao: str = "",
                    saldo_inicial: float = 0.0, data_saldo: str | None = None,
                    conta_origem_id: int | None = None) -> int:
@@ -1642,6 +1655,11 @@ def eh_investimento(conta: db.sqlite3.Row) -> bool:
                  or "investimento" in (conta["observacao"] or "").lower()))
 
 
+# Vieram da carga inicial, não de uma escolha de ninguém: sem movimento, não
+# fazem parte da lista de aplicações de quem usa o programa.
+CONTAS_GENERICAS_DE_INVESTIMENTO = ("1.1.05", "1.2.01")
+
+
 def listar_investimentos() -> list[dict]:
     """Cada aplicação com aportes, resgates, rendimento e rentabilidade."""
     conta_rendimento = db.query_one("SELECT id FROM conta WHERE codigo = ?",
@@ -1674,8 +1692,11 @@ def listar_investimentos() -> list[dict]:
         ultimo = db.query_one(
             "SELECT MAX(l.data) d FROM partida p JOIN lancamento l ON l.id=p.lancamento_id"
             " WHERE p.conta_id=?", (conta["id"],))
-        # A conta genérica do plano (1.1.05) só aparece se realmente for usada.
-        if abs(saldo) < CENTAVO and ultimo["d"] is None:
+        # As contas genéricas do plano padrão só aparecem se forem usadas de
+        # fato. Uma aplicação criada pelo usuário aparece sempre, mesmo zerada:
+        # conta que existe e não se vê é conta que não dá para encerrar.
+        if (conta["codigo"] in CONTAS_GENERICAS_DE_INVESTIMENTO
+                and abs(saldo) < CENTAVO and ultimo["d"] is None):
             continue
 
         saida.append({
@@ -5235,6 +5256,97 @@ def caixa_para_as_contas(titulos: list) -> dict:
         "falta_com_recebimentos": round(max(0.0, -com_recebimentos), 2),
         "contas_negativas": negativas,
     }
+
+
+def contas_para_pagamento(titulos: list) -> dict:
+    """Conta a conta: quanto tem, quanto sai, quanto entra e como fica.
+
+    O total do rodapé responde "dá para pagar?". Esta visão responde a pergunta
+    seguinte, que é a que trava o Pix na hora: *desta* conta, dá? O dinheiro
+    pode existir e estar no lugar errado.
+
+    Só entram as contas marcadas como dinheiro disponível (em Minhas Contas),
+    porque são elas que o usuário escolheu para valer como saldo.
+    """
+    carteiras = {c["id"]: c for c in listar_carteiras()
+                 if grupo_da_conta(c) == GRUPO_DO_FLUXO}
+
+    movimento: dict[int, dict] = {}
+    fora = {"no_cartao": 0.0, "sem_conta": 0.0, "a_receber_sem_conta": 0.0}
+    for titulo in titulos:
+        if titulo["status"] != "ABERTO":
+            continue
+        chaves = titulo.keys()
+        valor = round(float(titulo["valor_atualizado"]
+                            if "valor_atualizado" in chaves
+                            and titulo["valor_atualizado"] else titulo["valor"]), 2)
+        conta = titulo["conta_pagamento_id"]
+        recebe = titulo["tipo"] == "RECEBER"
+        if conta not in carteiras:
+            if recebe:
+                fora["a_receber_sem_conta"] += valor
+            elif conta:
+                fora["no_cartao"] += valor
+            else:
+                fora["sem_conta"] += valor
+            continue
+        linha = movimento.setdefault(conta, {"sai": 0.0, "entra": 0.0, "quantas": 0})
+        linha["entra" if recebe else "sai"] += valor
+        linha["quantas"] += 1
+
+    linhas = []
+    for conta_id, conta in carteiras.items():
+        dados = movimento.get(conta_id, {"sai": 0.0, "entra": 0.0, "quantas": 0})
+        saldo = saldo_conta(conta_id)
+        sai, entra = round(dados["sai"], 2), round(dados["entra"], 2)
+        fica = round(saldo - sai, 2)
+        fica_com_entradas = round(fica + entra, 2)
+        linhas.append({
+            "id": conta_id,
+            "nome": conta["nome"],
+            "instituicao": conta["instituicao"] or "",
+            "saldo": saldo,
+            "sai": sai,
+            "entra": entra,
+            "quantas": dados["quantas"],
+            "fica": fica,
+            "fica_com_entradas": fica_com_entradas,
+            "cobre": fica >= -CENTAVO,
+            "falta": round(max(0.0, -fica), 2),
+            "usada": dados["quantas"] > 0,
+        })
+    # Quem tem conta a pagar aparece primeiro, e dentro disso quem está pior.
+    linhas.sort(key=lambda c: (not c["usada"], c["fica"]))
+
+    usadas = [c for c in linhas if c["usada"]]
+    return {
+        "contas": linhas,
+        "usadas": usadas,
+        "faltando": [c for c in usadas if not c["cobre"]],
+        "tem": round(sum(c["saldo"] for c in linhas), 2),
+        "sai": round(sum(c["sai"] for c in linhas), 2),
+        "entra": round(sum(c["entra"] for c in linhas), 2),
+        "fica": round(sum(c["fica"] for c in linhas), 2),
+        "no_cartao": round(fora["no_cartao"], 2),
+        "sem_conta": round(fora["sem_conta"], 2),
+        "a_receber_sem_conta": round(fora["a_receber_sem_conta"], 2),
+    }
+
+
+def recado_por_conta(resumo: dict) -> str:
+    """Resume a situação conta a conta em uma frase."""
+    if not resumo["usadas"]:
+        return ("Nenhuma conta a pagar está apontando para uma conta de dinheiro."
+                if resumo["sem_conta"] > CENTAVO or resumo["no_cartao"] > CENTAVO
+                else "Nada a pagar pelas suas contas de dinheiro.")
+    if not resumo["faltando"]:
+        return (f"Todas as {len(resumo['usadas'])} conta(s) usadas têm saldo para o que"
+                f" sai delas. Depois de pagar sobram {moeda(resumo['fica'])} no total.")
+    nomes = ", ".join(c["nome"] for c in resumo["faltando"][:3])
+    total = moeda(round(sum(c["falta"] for c in resumo["faltando"]), 2))
+    return (f"Falta saldo em {len(resumo['faltando'])} conta(s) — {nomes} —"
+            f" somando {total}. O dinheiro pode existir noutra conta: aí é caso de"
+            " transferir antes de pagar.")
 
 
 def recado_do_caixa(caixa: dict) -> str:

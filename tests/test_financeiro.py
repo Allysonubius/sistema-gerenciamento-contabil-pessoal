@@ -234,3 +234,34 @@ def test_o_formulario_rola_e_os_botoes_ficam_fixos(sistema, contas, raiz_tk):
         dialogo.destroy()
         for filho in raiz_tk.winfo_children():
             filho.destroy()
+
+
+def test_nenhum_campo_escreve_por_cima_de_outro(sistema, contas, raiz_tk):
+    """Dois quadros do registro tinham rótulo em cima de rótulo.
+
+    A causa era o número da linha do grid vir solto em cada chamada: ninguém
+    via o choque lendo o código. Os ajudantes passaram a devolver a próxima
+    linha livre, e este teste olha o resultado na tela.
+    """
+    import importlib
+
+    modulo = importlib.reload(importlib.import_module("app.ui.lancamentos"))
+    dialogo = modulo.DialogoMovimento(raiz_tk, None, lambda: None)
+    dialogo.grab_release()
+    try:
+        dialogo.update_idletasks()
+        for indice, nome in enumerate(dialogo.ABAS):
+            aba = dialogo.notebook.nametowidget(dialogo.notebook.tabs()[indice])
+            ocupadas = {}
+            for filho in aba.winfo_children():
+                if filho.winfo_manager() != "grid":
+                    continue
+                info = filho.grid_info()
+                celula = (int(info["row"]), int(info["column"]))
+                assert celula not in ocupadas, (
+                    f"na aba {nome!r} dois widgets dividem a célula {celula}")
+                ocupadas[celula] = filho
+    finally:
+        dialogo.destroy()
+        for filho in raiz_tk.winfo_children():
+            filho.destroy()

@@ -5,6 +5,7 @@ import tkinter as tk
 from tkinter import messagebox, ttk
 
 from app import services
+from app.ui import perguntas
 from app.ui.theme import CORES, FONTE
 from app.ui.widgets import (CampoData, CampoValor, SeletorConta, Tabela, centralizar)
 
@@ -43,6 +44,9 @@ class JanelaInvestimentos(tk.Toplevel):
                    command=self.rendimento).pack(side="left", padx=8)
         ttk.Button(acoes, text="Usar conta existente",
                    command=self.marcar_existente).pack(side="right")
+        # Aplicação que acabou precisa sair da lista sem levar o passado junto.
+        ttk.Button(acoes, text="Encerrar aplicação", style="Perigo.TButton",
+                   command=self.encerrar).pack(side="right", padx=8)
 
         self.tabela = Tabela(corpo, [
             ("nome", "Aplicação", 200, "w"),
@@ -133,6 +137,71 @@ class JanelaInvestimentos(tk.Toplevel):
         if conta_id:
             from app.ui.carteiras import JanelaExtrato
             JanelaExtrato(self, conta_id)
+
+    def encerrar(self) -> None:
+        """Tira a aplicação da lista — desativando ou apagando, conforme o caso.
+
+        Aplicação com saldo ou com histórico não se apaga: apagar levaria junto
+        os aportes e resgates que explicam de onde o dinheiro veio. Desativar
+        resolve o que a pessoa quer (sumir da lista) sem apagar o passado.
+        """
+        conta_id = self._selecionada()
+        if conta_id is None:
+            return
+        conta = services.obter_conta(conta_id)
+        saldo = services.saldo_conta(conta_id)
+        uso = services.uso_da_conta(conta_id)
+
+        if abs(saldo) > 0.005:
+            escolha = perguntas.escolher(
+                self, "Tirar da lista de investimentos",
+                f"'{conta['nome']}' ainda tem {services.moeda(saldo)} aplicados.",
+                [("Deixar como está", "Nada muda.", "nada"),
+                 ("Tirar só da lista de investimentos",
+                  "A conta continua existindo em Minhas Contas, com o saldo intacto —"
+                  " ela só deixa de ser acompanhada como aplicação.", "desmarcar"),
+                 ("Desativar a conta",
+                  "Ela some dos seletores e das somas. O saldo e o histórico ficam"
+                  " guardados, e dá para reativar em Categorias.", "desativar")])
+        elif uso["lancamentos"]:
+            escolha = perguntas.escolher(
+                self, "Tirar da lista de investimentos",
+                f"'{conta['nome']}' está zerada, mas tem"
+                f" {uso['lancamentos']} movimento(s) registrados.",
+                [("Deixar como está", "Nada muda.", "nada"),
+                 ("Desativar a conta",
+                  "Ela some dos seletores e das somas. O histórico fica guardado, e dá"
+                  " para reativar em Categorias.", "desativar"),
+                 ("Tirar só da lista de investimentos",
+                  "A conta continua ativa em Minhas Contas; só deixa de ser acompanhada"
+                  " como aplicação.", "desmarcar")])
+        else:
+            escolha = perguntas.escolher(
+                self, "Apagar a aplicação",
+                f"'{conta['nome']}' está zerada e nunca foi usada.",
+                [("Desativar a conta",
+                  "Ela some dos seletores, mas continua existindo.", "desativar"),
+                 ("Apagar de vez",
+                  "Como nada foi lançado nela, não há histórico a perder. Não dá para"
+                  " desfazer.", "apagar")])
+
+        if escolha in (None, "nada"):
+            return
+        try:
+            if escolha == "desmarcar":
+                services.marcar_como_investimento(conta_id, False)
+                recado = f"'{conta['nome']}' saiu da lista de investimentos."
+            elif escolha == "desativar":
+                services.definir_conta_ativa(conta_id, False)
+                recado = f"'{conta['nome']}' foi desativada."
+            else:
+                services.excluir_conta(conta_id)
+                recado = f"'{conta['nome']}' foi apagada."
+        except services.RegraNegocioError as erro:
+            perguntas.avisar(self, "Não foi possível", str(erro))
+            return
+        self._apos()
+        perguntas.avisar(self, "Pronto", recado)
 
     def _apos(self) -> None:
         self.recarregar()
