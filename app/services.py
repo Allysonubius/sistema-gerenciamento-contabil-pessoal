@@ -4480,6 +4480,68 @@ def renda_do_mes(competencia: str | None = None) -> dict:
             "total": round(recebido + a_receber, 2)}
 
 
+def renda_tipica(competencia: str | None = None,
+                 meses: int = MESES_BASE_ORCAMENTO) -> dict:
+    """Quanto costuma entrar por mês, pelos meses fechados mais recentes.
+
+    Só conta o que de fato caiu na conta — previsão de recebimento é promessa,
+    e orçamento feito de promessa é orçamento que fura.
+    """
+    competencia = competencia or mes_atual()
+    anteriores = [m for m in meses_do_historico() if m < competencia][-meses:]
+    valores = []
+    for anterior in anteriores:
+        ano, mes = (int(p) for p in anterior.split("-"))
+        row = db.query_one(
+            "SELECT COALESCE(SUM(CASE WHEN p.tipo='C' THEN p.valor ELSE -p.valor END),0) AS t"
+            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+            " JOIN conta c ON c.id = p.conta_id"
+            " WHERE c.tipo = 'RECEITA' AND l.data BETWEEN ? AND ?",
+            (f"{anterior}-01", date(ano, mes, _ultimo_dia(ano, mes)).isoformat()))
+        valores.append(round(float(row["t"]), 2))
+
+    usados = sorted(v for v in valores if v > CENTAVO)
+    if not usados:
+        return {"tipica": 0.0, "piso": 0.0, "meses": len(valores), "competencias": anteriores}
+    meio = len(usados) // 2
+    mediana = (usados[meio] if len(usados) % 2
+               else round((usados[meio - 1] + usados[meio]) / 2, 2))
+    return {"tipica": round(mediana, 2), "piso": usados[0],
+            "meses": len(usados), "competencias": anteriores}
+
+
+def renda_de_referencia(competencia: str | None = None) -> dict:
+    """A renda com que vale a pena planejar o mês.
+
+    O mês em andamento quase sempre mostra menos do que vai entrar: o salário
+    ainda não caiu, e só o que já caiu aparece. Planejar por esse número fazia
+    o orçamento cortar tudo para caber numa renda que ainda ia chegar — e um
+    plano que manda gastar menos do que as contas fixas já consomem não é
+    plano, é ruído.
+
+    Por isso, para o mês corrente ou futuro, vale o maior entre o que o mês já
+    conhece e o que costuma entrar. Mês fechado é história: ali vale o que
+    realmente entrou, e ponto.
+    """
+    competencia = competencia or mes_atual()
+    do_mes = renda_do_mes(competencia)
+    historico = renda_tipica(competencia)
+    fechado = competencia < mes_atual()
+    if fechado or do_mes["total"] >= historico["tipica"] - CENTAVO:
+        usada, origem = do_mes["total"], "mes"
+    else:
+        usada, origem = historico["tipica"], "historico"
+    return {
+        "do_mes": do_mes["total"],
+        "recebido": do_mes["recebido"],
+        "a_receber": do_mes["a_receber"],
+        "tipica": historico["tipica"],
+        "meses_tipica": historico["meses"],
+        "usada": round(usada, 2),
+        "origem": origem,
+    }
+
+
 def resumo_orcamento(competencia: str | None = None) -> dict:
     competencia = competencia or mes_atual()
     linhas = orcamento_do_mes(competencia)
@@ -4490,6 +4552,7 @@ def resumo_orcamento(competencia: str | None = None) -> dict:
     comprometido = round(sum(l["comprometido"] for l in linhas), 2)
     projecao = round(sum(l["projecao"] for l in linhas), 2)
     renda = renda_do_mes(competencia)
+    referencia = renda_de_referencia(competencia)
 
     return {
         "previsto": previsto,
@@ -4512,6 +4575,7 @@ def resumo_orcamento(competencia: str | None = None) -> dict:
         "vao_passar_da_base": sorted((l for l in linhas if l["vai_passar_da_base"]),
                                      key=lambda l: -l["projecao"]),
         "renda": renda,
+        "renda_referencia": referencia,
         # Quanto do que entra no mês já está planejado para sair.
         "percentual_da_renda": (round(previsto / renda["total"] * 100, 1)
                                 if renda["total"] > CENTAVO else 0.0),
@@ -4536,14 +4600,24 @@ def plano_sugerido(competencia: str | None = None, meses: int = MESES_BASE_ORCAM
     valor que já aconteceu — logo, cabe. O que já está contratado (conta fixa,
     boleto lançado) não entra na conta de corte — ele é piso, não escolha.
 
+    A renda que ancora o plano é a de referência: o mês em andamento mostra só
+    o que já caiu, e planejar por ele cortava tudo para caber num salário que
+    ainda ia chegar.
+
     Quando nem o mínimo cabe na renda, o plano corta os variáveis na mesma
     proporção e avisa que o buraco é estrutural.
     """
     competencia = competencia or mes_atual()
     ano, mes = (int(p) for p in competencia.split("-"))
     inicio, fim = f"{competencia}-01", date(ano, mes, _ultimo_dia(ano, mes)).isoformat()
-    renda = renda_do_mes(competencia)["total"]
+    referencia = renda_de_referencia(competencia)
+    renda = referencia["usada"]
     comprometidos = _comprometido_do_mes(inicio, fim)
+    gastos_do_mes = {row["id"]: round(float(row["total"]), 2) for row in db.query(
+        "SELECT c.id, SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS total"
+        " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+        " JOIN conta c ON c.id = p.conta_id"
+        " WHERE c.tipo='DESPESA' AND l.data BETWEEN ? AND ? GROUP BY c.id", (inicio, fim))}
 
     anteriores = [m for m in meses_do_historico() if m < competencia][-meses:]
     linhas = []
@@ -4572,6 +4646,7 @@ def plano_sugerido(competencia: str | None = None, meses: int = MESES_BASE_ORCAM
             "fixo": fixo,
             "minimo": round(minimo, 2),
             "tipico": tipico,
+            "gasto": gastos_do_mes.get(conta["id"], 0.0),
             # O que dá para cortar é só a parte variável acima do contratado.
             "variavel": round(max(minimo - fixo, 0.0), 2),
             "teto_atual": teto_da_categoria(conta["id"], competencia)[0],
@@ -4596,13 +4671,32 @@ def plano_sugerido(competencia: str | None = None, meses: int = MESES_BASE_ORCAM
         linha["percentual_renda"] = (round(sugerido / renda * 100, 1)
                                      if renda > CENTAVO else 0.0)
         linha["corte"] = round(linha["teto_atual"] - sugerido, 2) if linha["teto_atual"] else 0.0
+        # O que já passou do que o plano reserva, em dinheiro e em fatia da
+        # renda. A fatia é o que compara categorias de tamanhos diferentes:
+        # cem reais a mais pesam de um jeito em quem ganha mil e de outro em
+        # quem ganha dez mil.
+        excedeu = round(max(linha["gasto"] - sugerido, 0.0), 2)
+        linha["excesso"] = excedeu
+        linha["percentual_gasto_renda"] = (round(linha["gasto"] / renda * 100, 1)
+                                           if renda > CENTAVO else 0.0)
+        linha["percentual_excesso_renda"] = (round(excedeu / renda * 100, 1)
+                                             if renda > CENTAVO else 0.0)
+        linha["extrapolou"] = excedeu > CENTAVO
 
     linhas.sort(key=lambda l: -l["sugerido"])
     total_sugerido = round(sum(l["sugerido"] for l in linhas), 2)
+    extrapoladas = sorted((l for l in linhas if l["extrapolou"]),
+                          key=lambda l: -l["excesso"])
     return {
         "competencia": competencia,
         "renda": renda,
+        "renda_referencia": referencia,
         "categorias": linhas,
+        "extrapoladas": extrapoladas,
+        "total_extrapolado": round(sum(l["excesso"] for l in extrapoladas), 2),
+        "percentual_extrapolado": (round(sum(l["excesso"] for l in extrapoladas)
+                                         / renda * 100, 1) if renda > CENTAVO else 0.0),
+        "total_gasto": round(sum(l["gasto"] for l in linhas), 2),
         "total_fixo": total_fixo,
         "total_sugerido": total_sugerido,
         "sobra": round(renda - total_sugerido, 2),
@@ -4621,6 +4715,66 @@ def aplicar_plano_sugerido(competencia: str | None = None, so_este_mes: bool = F
     for linha in plano["categorias"]:
         definir_orcamento(linha["conta_id"], linha["sugerido"], alvo)
     return len(plano["categorias"])
+
+
+def controle_de_gastos(competencia: str | None = None) -> dict:
+    """O mês contra o orçamento que vale para cada categoria.
+
+    Junta num lugar só as duas metades que a tela precisa mostrar e que, se
+    ficassem separadas, divergiriam: o acompanhamento do mês e o orçamento
+    montado pelo histórico.
+
+    O teto em vigor é o que a pessoa definiu; onde ela não definiu nada, vale o
+    que o histórico propõe. Sem isso, categoria sem teto não tinha régua
+    nenhuma — e é exatamente ali que o gasto cresce sem ninguém notar.
+    """
+    competencia = competencia or mes_atual()
+    plano = plano_sugerido(competencia)
+    proposto = {l["conta_id"]: l for l in plano["categorias"]}
+    renda = plano["renda"]
+
+    categorias = []
+    for linha in orcamento_do_mes(competencia):
+        sugestao = proposto.get(linha["conta_id"])
+        sugerido = sugestao["sugerido"] if sugestao else 0.0
+        if linha["teto"] > CENTAVO:
+            limite, origem = linha["teto"], "teto"
+        elif sugerido > CENTAVO:
+            limite, origem = sugerido, "historico"
+        else:
+            limite, origem = 0.0, "nenhum"
+        gasto = linha["gasto"]
+        excesso = round(max(gasto - limite, 0.0), 2) if limite > CENTAVO else 0.0
+        categorias.append({
+            **linha,
+            "limite": limite,
+            "origem_do_limite": origem,
+            "sugerido": sugerido,
+            "excesso": excesso,
+            "extrapolou": excesso > CENTAVO,
+            "percentual_gasto_renda": (round(gasto / renda * 100, 1)
+                                       if renda > CENTAVO else 0.0),
+            "percentual_excesso_renda": (round(excesso / renda * 100, 1)
+                                         if renda > CENTAVO else 0.0),
+        })
+
+    extrapoladas = sorted((c for c in categorias if c["extrapolou"]),
+                          key=lambda c: -c["excesso"])
+    total = round(sum(c["excesso"] for c in extrapoladas), 2)
+    return {
+        "competencia": competencia,
+        "renda": renda,
+        "renda_referencia": plano["renda_referencia"],
+        "categorias": categorias,
+        "extrapoladas": extrapoladas,
+        "total_extrapolado": total,
+        "percentual_extrapolado": (round(total / renda * 100, 1)
+                                   if renda > CENTAVO else 0.0),
+        "gasto_total": round(sum(c["gasto"] for c in categorias), 2),
+        "percentual_gasto": (round(sum(c["gasto"] for c in categorias) / renda * 100, 1)
+                             if renda > CENTAVO else 0.0),
+        "plano": plano,
+    }
 
 
 def sugerir_orcamento(conta_id: int, meses: int = MESES_BASE_ORCAMENTO,

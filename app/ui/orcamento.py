@@ -6,6 +6,7 @@ from datetime import date
 from tkinter import messagebox, ttk
 
 from app import services
+from app.ui import perguntas
 from app.ui.theme import CORES, FONTE
 from app.ui.widgets import (Cabecalho, CampoData, CampoValor, SeletorConta,
                             Tabela, centralizar)
@@ -22,8 +23,13 @@ class Orcamento(ttk.Frame):
             "Defina quanto pretende gastar em cada categoria e acompanhe o quanto já foi.")
         self.cabecalho.pack(fill="x")
         self.cabecalho.botao("Definir teto", self.definir, "Primario.TButton")
-        self.cabecalho.botao("Aplicar plano enxuto", self.aplicar_plano, "Primario.TButton")
-        self.cabecalho.botao("Sugerir pelo histórico", self.sugerir_todos)
+        # Um botão só. "Sugerir pelo histórico" e "Aplicar plano enxuto"
+        # partiam do mesmo histórico e chegavam a números diferentes: um
+        # copiava o gasto típico, o outro o cortava para caber na renda. Dois
+        # caminhos para a mesma pergunta só servem para a pessoa escolher
+        # errado.
+        self.cabecalho.botao("Montar orçamento pelo histórico", self.aplicar_plano,
+                             "Primario.TButton")
         self.cabecalho.botao("Poupança do mês", self.abrir_poupanca)
         self.cabecalho.botao("Meus objetivos", self.abrir_metas)
         ttk.Separator(self).pack(fill="x")
@@ -66,22 +72,22 @@ class Orcamento(ttk.Frame):
         self._dados_barra = (0.0, 0.0)
 
         self.tabela = Tabela(corpo, [
-            ("nome", "Categoria", 210, "w"),
-            ("teto", "Posso gastar", 120, "e"),
-            ("gasto", "Já gastei", 110, "e"),
-            ("comprometido", "Já tem dono", 110, "e"),
-            ("barra", "Consumo", 140, "w"),
-            ("restante", "Sobra livre", 115, "e"),
-            ("dia", "Por dia até o fim", 125, "e"),
-            ("projecao", "Deve fechar em", 125, "e"),
-            ("sugerido", "Devia gastar", 115, "e"),
-            ("pct_renda", "% da renda", 95, "center"),
-            ("base", "Base (3 meses)", 125, "e"),
-            ("excesso", "Passou da base", 125, "e"),
+            ("nome", "Categoria", 200, "w"),
+            ("teto", "Posso gastar", 115, "e"),
+            ("gasto", "Já gastei", 105, "e"),
+            ("pct_gasto", "% do que recebo", 115, "center"),
+            ("comprometido", "Já tem dono", 105, "e"),
+            ("barra", "Consumo", 130, "w"),
+            ("restante", "Sobra livre", 110, "e"),
+            ("dia", "Por dia até o fim", 120, "e"),
+            ("projecao", "Deve fechar em", 120, "e"),
+            ("base", "Base (3 meses)", 120, "e"),
+            ("sugerido", "Devia gastar", 110, "e"),
+            ("excesso", "Passou do orçamento", 155, "e"),
         ], on_duplo_clique=lambda _i: self.definir(), largura_livre=True, altura=8)
         self.tabela.definir_texto_vazio(
-            "Nenhuma categoria com teto ou gasto neste mês. Clique em 'Sugerir pelo"
-            " histórico' para começar.")
+            "Nenhuma categoria com teto ou gasto neste mês. Clique em 'Montar"
+            " orçamento pelo histórico' para começar.")
         self.tabela.grid(row=2, column=0, sticky="nsew", pady=(12, 0))
 
         ttk.Label(corpo, text="Clique duas vezes em uma categoria para mudar o teto. O teto vale"
@@ -104,12 +110,16 @@ class Orcamento(ttk.Frame):
         self.lbl_mes.configure(text=services.mes_nome(self.competencia).capitalize())
         resumo = services.resumo_orcamento(self.competencia)
 
-        # Plano enxuto do mês: quanto cada categoria devia consumir da renda.
-        plano = services.plano_sugerido(self.competencia)
+        # O mês contra o orçamento em vigor, calculado num lugar só: o teto que
+        # a pessoa definiu ou, onde ela não definiu nada, o que o histórico
+        # propõe. A tela e o recado contam a mesma história porque leem a mesma
+        # conta.
+        controle = services.controle_de_gastos(self.competencia)
+        plano = controle["plano"]
         sugestoes = {l["conta_id"]: l for l in plano["categorias"]}
 
         self.tabela.limpar()
-        for linha in resumo["categorias"]:
+        for linha in controle["categorias"]:
             if linha["teto"] > 0:
                 # A barra considera o que já tem dono: é o consumo real do teto.
                 consumo = self._barrinha(linha["percentual_com_comprometido"])
@@ -127,18 +137,13 @@ class Orcamento(ttk.Frame):
             else:
                 base = "—"
 
-            # Quanto o mês passou do que a categoria costuma consumir. Onde não
-            # há teto definido, esta é a única régua que existe — e é onde o
-            # gasto crescia sem ninguém notar.
-            if linha["excesso_sobre_base"] > 0.005:
-                excesso = "+" + services.moeda(linha["excesso_sobre_base"])
-            elif linha["vai_passar_da_base"]:
+            if linha["vai_passar_da_base"]:
                 excesso = "vai passar"
             else:
                 excesso = "—"
 
             tags: tuple[str, ...] = ()
-            if linha["estourou"] or linha["excesso_sobre_base"] > 0.005:
+            if linha["estourou"]:
                 tags = ("negativo",)
             elif linha["risco"] or linha["vai_passar_da_base"]:
                 tags = ("destaque",)
@@ -146,20 +151,28 @@ class Orcamento(ttk.Frame):
             sugestao = sugestoes.get(linha["conta_id"])
             if sugestao and sugestao["sugerido"] > 0.005:
                 sugerido = services.moeda(sugestao["sugerido"])
-                pct_renda = (f"{sugestao['percentual_renda']:.1f}%"
-                             if sugestao["percentual_renda"] else "—")
                 # Teto bem acima do que o plano pede: a linha merece atenção.
                 if not tags and sugestao["corte"] > 0.005 and linha["teto"] > 0:
                     tags = ("destaque",)
             else:
-                sugerido, pct_renda = "—", "—"
+                sugerido = "—"
+
+            # Quanto desta categoria pesa no que entra. É a fatia que compara
+            # categorias de tamanhos diferentes: cem reais a mais pesam de um
+            # jeito em quem ganha mil e de outro em quem ganha dez mil.
+            pct_gasto = (f"{linha['percentual_gasto_renda']:.1f}%"
+                         if linha["percentual_gasto_renda"] else "—")
+            if linha["extrapolou"]:
+                excesso = ("+" + services.moeda(linha["excesso"])
+                           + f"  ·  {linha['percentual_excesso_renda']:.1f}%")
+                tags = ("negativo",)
 
             self.tabela.inserir(
-                (linha["nome"], teto, services.moeda(linha["gasto"]),
+                (linha["nome"], teto, services.moeda(linha["gasto"]), pct_gasto,
                  services.moeda(linha["comprometido"]) if linha["comprometido"] else "—",
                  consumo, restante, por_dia,
                  services.moeda(linha["projecao"]) if linha["projecao"] else "—",
-                 sugerido, pct_renda, base, excesso),
+                 base, sugerido, excesso),
                 iid=linha["conta_id"], tags=tags)
         self.tabela.finalizar()
 
@@ -173,6 +186,14 @@ class Orcamento(ttk.Frame):
             foreground=CORES["sucesso"] if livre >= 0 else CORES["perigo"])
 
         avisos = []
+        referencia = resumo["renda_referencia"]
+        if referencia["origem"] == "historico":
+            avisos.append(
+                f"Ainda entraram {services.moeda(referencia['do_mes'])} neste mês, mas"
+                f" costumam entrar {services.moeda(referencia['tipica'])}"
+                f" (pelos últimos {referencia['meses_tipica']} meses). O orçamento está"
+                " planejado por esse valor — planejar pelo que já caiu cortaria tudo"
+                " para caber num salário que ainda vai chegar.")
         renda = resumo["renda"]
         if renda["total"] > 0.005:
             sobra = resumo["sobra_prevista"]
@@ -209,8 +230,18 @@ class Orcamento(ttk.Frame):
             avisos.append("No ritmo de agora vai passar da base em: "
                           + ", ".join(l["nome"] for l in resumo["vao_passar_da_base"][:4]))
 
+        if controle["extrapoladas"]:
+            nomes = ", ".join(
+                f"{l['nome']} +{services.moeda(l['excesso'])}"
+                f" ({l['percentual_excesso_renda']:.1f}% do que recebo)"
+                for l in controle["extrapoladas"][:4])
+            avisos.append(
+                f"Passou do orçamento em {len(controle['extrapoladas'])} categoria(s),"
+                f" somando {services.moeda(controle['total_extrapolado'])}"
+                f" — {controle['percentual_extrapolado']:.1f}% do que recebo: {nomes}.")
+
         if plano["total_sugerido"] > 0.005:
-            texto = (f"Plano enxuto, com base nos três meses fechados:"
+            texto = (f"Orçamento pelos três meses fechados:"
                      f" {services.moeda(plano['total_sugerido'])}"
                      f" ({plano['percentual_da_renda']:.0f}% do que entra) —"
                      f" {services.moeda(plano['total_fixo'])} já são contas fixas."
@@ -269,58 +300,49 @@ class Orcamento(ttk.Frame):
         item = self.tabela.selecionado()
         DialogoTeto(self, int(item) if item else None, self.competencia, self.recarregar)
 
-    def sugerir_todos(self) -> None:
-        if not messagebox.askyesno(
-                "Sugerir tetos",
-                "O sistema vai propor um teto para cada categoria com base no que você"
-                " gastou nos três meses fechados mais recentes — o valor do meio, que"
-                " não se deixa levar por um mês atípico.\n\nCategorias que já têm teto"
-                " não são alteradas."
-                "\n\nContinuar?",
-                parent=self):
-            return
-        criados = 0
-        for conta in services.listar_contas(apenas_ativas=True, apenas_analiticas=True):
-            if conta["tipo"] != "DESPESA":
-                continue
-            teto, _ = services.teto_da_categoria(conta["id"], self.competencia)
-            if teto > 0:
-                continue
-            media = services.sugerir_orcamento(conta["id"])
-            if media > 0.005:
-                services.definir_orcamento(conta["id"], media)
-                criados += 1
-        self.recarregar()
-        messagebox.showinfo("Pronto", f"{criados} categoria(s) receberam um teto sugerido."
-                                      "\nAjuste os valores como preferir.", parent=self)
-
     def aplicar_plano(self) -> None:
-        """Grava os tetos do plano enxuto, que cabem na renda do mês."""
+        """Grava os tetos do orçamento montado a partir do histórico."""
         plano = services.plano_sugerido(self.competencia)
         if not plano["categorias"]:
-            messagebox.showinfo("Plano enxuto",
-                                "Ainda não há histórico suficiente para montar um plano.",
-                                parent=self)
+            perguntas.avisar(
+                self, "Sem histórico ainda",
+                "Ainda não há meses fechados com gasto registrado para montar um"
+                " orçamento. Depois de um mês de uso, este botão passa a funcionar.")
             return
-        maiores = ", ".join(f"{l['nome']} {services.moeda(l['sugerido'])}"
-                            for l in plano["categorias"][:4])
-        if not messagebox.askyesno(
-                "Aplicar plano enxuto",
-                f"Entram {services.moeda(plano['renda'])} por mês.\n\n"
-                f"O plano propõe gastar {services.moeda(plano['total_sugerido'])}"
-                f" ({plano['percentual_da_renda']:.0f}% da renda), sobrando"
-                f" {services.moeda(plano['sobra'])}.\n\n"
-                f"Base: o mês mais barato de cada categoria nos três meses fechados"
-                f" mais recentes, mais o que já é conta fixa deste mês. Não é um valor"
-                f" inventado para apertar — é um gasto que já aconteceu.\n"
-                f"Maiores tetos: {maiores}.\n\n"
-                "Os tetos atuais serão substituídos. Continuar?", parent=self):
+        referencia = plano["renda_referencia"]
+        maiores = "\n".join(f"   · {l['nome']}: {services.moeda(l['sugerido'])}"
+                            f" ({l['percentual_renda']:.1f}% do que recebo)"
+                            for l in plano["categorias"][:5])
+        de_onde = ("o que você costuma receber" if referencia["origem"] == "historico"
+                   else "o que entra neste mês")
+        detalhe = (
+            f"Renda de referência: {services.moeda(plano['renda'])} — {de_onde}.\n\n"
+            f"Teto proposto para o mês: {services.moeda(plano['total_sugerido'])}"
+            f" ({plano['percentual_da_renda']:.0f}% do que recebo), sobrando"
+            f" {services.moeda(plano['sobra'])}.\n"
+            f"Destes, {services.moeda(plano['total_fixo'])} já são contas fixas"
+            " — isso é piso, não escolha.\n\n"
+            f"Maiores tetos:\n{maiores}")
+        if plano["aperta"]:
+            detalhe += ("\n\nNem o mínimo histórico cabe no que você recebe. Os valores"
+                        " variáveis foram cortados na mesma proporção, e o buraco é"
+                        " estrutural: não se resolve escolhendo melhor dentro do mês.")
+        escolha = perguntas.escolher(
+            self, "Montar orçamento pelo histórico",
+            "O teto de cada categoria passa a ser o mês mais barato dela nos três meses"
+            " fechados mais recentes. Não é um valor inventado para apertar — é um gasto"
+            " que já aconteceu, logo cabe.",
+            [("Não mudar nada", "Os tetos atuais ficam como estão.", "nada"),
+             ("Montar o orçamento",
+              "Os tetos atuais são substituídos. Dá para ajustar um a um depois.",
+              "sim")],
+            detalhe=detalhe)
+        if escolha != "sim":
             return
         quantas = services.aplicar_plano_sugerido(self.competencia)
         self.recarregar()
-        messagebox.showinfo("Pronto", f"{quantas} categoria(s) com teto novo."
-                                      " Ajuste o que quiser clicando duas vezes.",
-                            parent=self)
+        perguntas.avisar(self, "Pronto", f"{quantas} categoria(s) com teto novo."
+                                         " Ajuste o que quiser clicando duas vezes.")
 
     def abrir_metas(self) -> None:
         JanelaMetas(self, self.recarregar)

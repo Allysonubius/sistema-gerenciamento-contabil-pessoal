@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 719 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 733 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -207,9 +207,35 @@ acusar ninguém.
 O aviso vem antes do estouro: mantido o ritmo do mês, as categorias que **vão** passar da
 base aparecem enquanto ainda dá para mudar. Avisar depois é tarde — a conta já foi.
 
-### O plano enxuto
+### A renda que ancora o plano
 
-"Aplicar plano enxuto" propõe, para cada categoria, o **mês mais barato dos três** — não um
+O mês em andamento quase sempre mostra menos do que vai entrar: o salário ainda não caiu, e
+só o que já caiu aparece. Planejar por esse número fazia o orçamento cortar tudo para caber
+numa renda que ainda ia chegar — e um plano que manda gastar menos do que as contas fixas já
+consomem não é plano, é ruído.
+
+Por isso a **renda de referência** é o maior entre o que o mês já conhece e o que costuma
+entrar (mediana dos mesmos três meses). Mês fechado é história: ali vale o que realmente
+entrou, e ponto. A tela diz qual dos dois está usando.
+
+### O limite em vigor
+
+Cada categoria é medida contra o teto que você definiu; **onde você não definiu nada, vale o
+que o histórico propõe**. Antes, categoria sem teto não tinha régua nenhuma.
+
+A coluna **% do que recebo** mostra o peso de cada categoria na renda, e **Passou do
+orçamento** mostra o excesso em dinheiro e em fatia da renda — a fatia é o que compara
+categorias de tamanhos diferentes: cem reais a mais pesam de um jeito em quem ganha mil e de
+outro em quem ganha dez mil.
+
+### Um botão só
+
+"Sugerir pelo histórico" e "Aplicar plano enxuto" partiam do mesmo histórico e chegavam a
+números diferentes: um copiava o gasto típico, o outro o cortava para caber na renda. Dois
+caminhos para a mesma pergunta só servem para escolher errado. Ficou **"Montar orçamento pelo
+histórico"**.
+
+Ele propõe, para cada categoria, o **mês mais barato dos três** — não um
 número inventado para apertar, mas um valor que já aconteceu, logo cabe. O que já está
 contratado (conta fixa, boleto lançado) é piso e não entra no corte. Quando nem o mínimo
 cabe na renda, o plano corta os variáveis na mesma proporção e avisa que o buraco é

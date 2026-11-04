@@ -198,10 +198,12 @@ def test_a_tela_mostra_a_base_e_o_quanto_passou(sistema, contas, historico, raiz
         valores = dict(zip(colunas, tela.tabela.tree.item(str(historico), "values")))
 
         assert "400" in valores["base"], "a base dos três meses"
-        assert valores["excesso"].startswith("+"), "e quanto passou dela"
-        assert "300" in valores["excesso"]
+        # Sem teto definido, o orçamento em vigor é o que o histórico propõe:
+        # o mês mais barato dos três, que aqui é 200.
+        assert valores["excesso"].startswith("+"), "e quanto passou dele"
+        assert "500" in valores["excesso"], "700 gastos contra 200 de orçamento"
         assert "negativo" in tela.tabela.tree.item(str(historico), "tags")
-        assert "Passou do que costuma gastar" in tela.lbl_aviso.cget("text")
+        assert "Passou do orçamento" in tela.lbl_aviso.cget("text")
     finally:
         for filho in raiz_tk.winfo_children():
             filho.destroy()
