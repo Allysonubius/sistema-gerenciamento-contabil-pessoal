@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 733 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 749 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -519,6 +519,37 @@ A lista separa o que está em uso do que já foi encerrado — *Ativas*, *Inativ
 *Todas*, com as ativas primeiro. Desativar sem caminho de volta seria apagar com outro
 nome; por isso o encerramento só oferece *apagar de vez* para a aplicação zerada e
 nunca usada, onde não há passado a perder.
+
+## Parar uma conta que se repete
+
+Apagar a mensalidade de novembro de uma assinatura cancelada apagava só novembro: a conta
+fixa continuava ativa, os meses fora da tela sobreviviam ao gesto e a geração automática
+recriava tudo no dia seguinte. Cancelar um serviço virava tarefa mensal.
+
+Agora, ao apagar uma conta que se repete, a ferramenta pergunta: **só este mês** ou **este e
+parar de repetir**. A segunda opção tira da lista todos os meses em aberto da série e encerra
+a repetição no mês anterior — a repetição não recria o que acabou de ser apagado. O que já
+foi pago nunca é tocado.
+
+## Mudar as parcelas
+
+O botão *Mudar as parcelas*, em Contas a Pagar, refaz **o que ainda falta** de uma série: em
+quantas vezes, a partir de quando, por quanto.
+
+São três pedidos que, no fundo, são a mesma conta vista de ângulos diferentes:
+
+- **Quitar de uma vez:** uma parcela só, no mês que você escolher. Há um atalho para isso.
+- **Esticar ou encurtar:** o mesmo total dividido em mais ou menos meses.
+- **Registrar um desconto:** o total editável, para quando o acordo mudou o valor.
+
+As parcelas novas nascem soltas da conta fixa de origem, e a origem se encerra no mês
+anterior. É de propósito: renegociar é um acordo novo, e deixá-las presas à série antiga
+faria a geração automática recriar depois exatamente os meses que acabaram de ser
+substituídos. A sobra de centavos vai na primeira parcela — uma última parcela diferente das
+outras é a que assusta na hora de pagar.
+
+Conta fixa **sem prazo** não se reparcela: ela não tem um total a dividir. Para mudar o valor
+dela, o caminho é *Contas fixas*.
 
 ## Mudar a data de uma conta
 

@@ -205,6 +205,10 @@ class Financeiro(ttk.Frame):
         self.btn_automatico = ttk.Button(selecionada, text="Débito automático",
                                          command=self.alternar_automatico)
         self.btn_automatico.pack(side="right", padx=8)
+        # Quitar de uma vez e refazer o número de parcelas são a mesma conta
+        # vista de dois jeitos: o que falta, dividido de outro modo.
+        ttk.Button(selecionada, text="Mudar as parcelas",
+                   command=self.reparcelar).pack(side="right")
 
         rodape = ttk.Frame(corpo, style="Superficie.TFrame", padding=14)
         rodape.configure(relief="solid", borderwidth=1)
@@ -804,11 +808,59 @@ class Financeiro(ttk.Frame):
             return
         self._apos()
 
-    def excluir(self) -> None:
+    def reparcelar(self) -> None:
+        """Refaz o que falta pagar: em quantas vezes, de quando, por quanto."""
         titulo_id = self._selecionado()
         if not titulo_id:
             return
-        if not messagebox.askyesno(
+        pode, motivo = services.pode_reparcelar(titulo_id)
+        if not pode:
+            perguntas.avisar(self, "Não dá para mexer nas parcelas", motivo)
+            return
+        DialogoReparcelar(self, titulo_id, self._apos_reparcelar)
+
+    def _apos_reparcelar(self, recado: str) -> None:
+        self._apos()
+        self.app.notificar(recado)
+
+    def excluir(self) -> None:
+        """Apaga a conta — e, sendo de uma série, oferece parar a série toda.
+
+        Quem apaga a mensalidade de novembro de uma assinatura que cancelou não
+        quer apagar só novembro. Antes, a conta fixa continuava ativa e os meses
+        de fora da tela sobreviviam ao gesto: cancelar virava tarefa mensal.
+        """
+        titulo_id = self._selecionado()
+        if not titulo_id:
+            return
+        serie = services.serie_do_titulo(titulo_id)
+        if serie["e_fixa"] and serie["quantas"] > 1:
+            quantas = serie["quantas"]
+            escolha = perguntas.escolher(
+                self, "Apagar conta",
+                f"'{serie['nome']}' se repete: há {quantas} mês(es) em aberto, de"
+                f" {services.mes_curto(serie['primeira'])} a"
+                f" {services.mes_curto(serie['ultima'])}.",
+                [("Apagar só este mês",
+                  "Os outros meses continuam, e a conta segue se repetindo.", "um"),
+                 ("Apagar este e parar de repetir",
+                  f"Os {quantas} meses em aberto saem da lista e a repetição termina."
+                  " O que já foi pago continua no histórico.", "serie")],
+                detalhe=f"Total em aberto: {services.moeda(serie['total'])}")
+            if escolha is None:
+                return
+            if escolha == "serie":
+                try:
+                    resultado = services.encerrar_serie_do_titulo(titulo_id)
+                except services.RegraNegocioError as erro:
+                    perguntas.avisar(self, "Não é possível apagar", str(erro))
+                    return
+                self._apos()
+                self.app.notificar(
+                    f"'{resultado['nome']}' parou de se repetir —"
+                    f" {resultado['removidos']} mês(es) saíram da lista.")
+                return
+        elif not messagebox.askyesno(
                 "Apagar conta",
                 "A conta será apagada definitivamente.\n"
                 "Se ela já foi paga, desfaça o pagamento antes.\n\nConfirma?", parent=self):
@@ -824,6 +876,163 @@ class Financeiro(ttk.Frame):
         self.recarregar()
         self.app.atualizar_dependentes()
         self._ajustar_botao_pagamento()
+
+
+# --------------------------------------------------------------------------- #
+class DialogoReparcelar(tk.Toplevel):
+    """Refaz o que falta pagar: em quantas vezes, a partir de quando, por quanto.
+
+    Uma janela só para três pedidos que são o mesmo: quitar de uma vez é
+    reparcelar em uma, esticar é reparcelar em mais, e negociar desconto é
+    reparcelar por menos. Separá-los em três botões faria a pessoa procurar
+    qual deles corresponde ao acordo que ela fez.
+    """
+
+    def __init__(self, master, titulo_id: int, ao_salvar):
+        super().__init__(master)
+        self.transient(master.winfo_toplevel())
+        self.titulo_id = titulo_id
+        self.ao_salvar = ao_salvar
+        self.serie = services.serie_do_titulo(titulo_id)
+        self.title("Mudar as parcelas")
+        self.configure(bg=CORES["fundo"])
+        self.resizable(False, False)
+
+        topo = tk.Frame(self, bg=CORES["superficie"], padx=24, pady=16)
+        topo.pack(fill="x")
+        tk.Label(topo, text=self.serie["nome"], bg=CORES["superficie"],
+                 fg=CORES["texto"], font=(FONTE, 15, "bold"), anchor="w").pack(fill="x")
+        tk.Label(topo, bg=CORES["superficie"], fg=CORES["texto_suave"],
+                 font=(FONTE, 10), anchor="w", justify="left",
+                 text=(f"Falta pagar {services.moeda(self.serie['total'])} em"
+                       f" {self.serie['quantas']} parcela(s), de"
+                       f" {services.mes_curto(self.serie['primeira'])} a"
+                       f" {services.mes_curto(self.serie['ultima'])}."
+                       if self.serie["quantas"] > 1 else
+                       f"Falta pagar {services.moeda(self.serie['total'])} em"
+                       f" {services.mes_curto(self.serie['primeira'])}.")
+                 ).pack(fill="x", pady=(4, 0))
+
+        corpo = ttk.Frame(self, padding=(24, 18))
+        corpo.pack(fill="both", expand=True)
+
+        linha = ttk.Frame(corpo)
+        linha.pack(fill="x")
+        ttk.Label(linha, text="Em quantas vezes:", style="Campo.TLabel").pack(side="left")
+        self.var_parcelas = tk.StringVar(value=str(self.serie["quantas"]))
+        self.sp_parcelas = ttk.Spinbox(linha, from_=1, to=services.PARCELAS_MAXIMAS,
+                                       width=5, textvariable=self.var_parcelas,
+                                       command=self._recalcular)
+        self.sp_parcelas.pack(side="left", padx=(8, 16))
+        self.var_parcelas.trace_add("write", lambda *_: self._recalcular())
+        # Atalho para o pedido mais comum: acabar com isso de uma vez.
+        ttk.Button(linha, text="Pagar tudo num mês só",
+                   command=lambda: self.var_parcelas.set("1")).pack(side="left")
+
+        linha2 = ttk.Frame(corpo)
+        linha2.pack(fill="x", pady=(14, 0))
+        ttk.Label(linha2, text="Primeira parcela vence em:",
+                  style="Campo.TLabel").pack(side="left")
+        self.dt_vencimento = CampoData(linha2, self.serie["abertas"][0]["vencimento"])
+        self.dt_vencimento.pack(side="left", padx=8)
+
+        linha3 = ttk.Frame(corpo)
+        linha3.pack(fill="x", pady=(14, 0))
+        ttk.Label(linha3, text="Total a pagar:", style="Campo.TLabel").pack(side="left")
+        self.cp_total = CampoValor(linha3, width=12)
+        self.cp_total.set_valor(self.serie["total"])
+        self.cp_total.pack(side="left", padx=8)
+        self.cp_total.var.trace_add("write", lambda *_: self._recalcular())
+        ttk.Label(linha3, style="Dica.TLabel",
+                  text="Mude só se combinou outro valor — desconto, acordo.").pack(
+            side="left", padx=8)
+
+        self.lbl_conta = ttk.Label(corpo, style="Secao.TLabel", wraplength=560,
+                                   justify="left")
+        self.lbl_conta.pack(anchor="w", pady=(16, 0))
+        self.lbl_aviso = ttk.Label(corpo, style="Dica.TLabel", wraplength=560,
+                                   justify="left")
+        self.lbl_aviso.pack(anchor="w", pady=(6, 0))
+
+        rodape = ttk.Frame(corpo)
+        rodape.pack(fill="x", pady=(18, 0))
+        ttk.Button(rodape, text="Cancelar", command=self.destroy).pack(side="right")
+        ttk.Button(rodape, text="Refazer as parcelas", style="Primario.TButton",
+                   command=self.salvar).pack(side="right", padx=8)
+
+        self._recalcular()
+        centralizar(self, 640, 430)
+        self.grab_set()
+        self.bind("<Escape>", lambda _e: self.destroy())
+
+    # ------------------------------------------------------------------ #
+    def _quantas(self) -> int:
+        try:
+            return max(int(self.var_parcelas.get() or 0), 0)
+        except ValueError:
+            return 0
+
+    def _total(self) -> float:
+        try:
+            return self.cp_total.get_valor() if self.cp_total.var.get().strip() else 0.0
+        except Exception:
+            return 0.0
+
+    def _recalcular(self) -> None:
+        """Conta na tela o que vai ser lançado, antes de salvar."""
+        parcelas, total = self._quantas(), self._total()
+        if parcelas < 1 or total <= 0:
+            self.lbl_conta.configure(text="")
+            self.lbl_aviso.configure(text="")
+            return
+        parcela = round(total / parcelas, 2)
+        sobra = round(total - parcela * parcelas, 2)
+        if parcelas == 1:
+            texto = f"Uma parcela só, de {services.moeda(total)}."
+        elif abs(sobra) > 0.005:
+            texto = (f"{parcelas} parcelas de {services.moeda(parcela)}"
+                     f" — a primeira de {services.moeda(round(parcela + sobra, 2))}.")
+        else:
+            texto = f"{parcelas} parcelas de {services.moeda(parcela)}."
+        self.lbl_conta.configure(text=texto)
+
+        avisos = [f"{self.serie['quantas']} parcela(s) em aberto serão substituídas."]
+        desconto = round(self.serie["total"] - total, 2)
+        if desconto > 0.005:
+            avisos.append(f"Você está registrando um desconto de"
+                          f" {services.moeda(desconto)}.")
+        elif desconto < -0.005:
+            avisos.append(f"O total ficou {services.moeda(abs(desconto))} maior do que"
+                          " o que estava lançado.")
+        if self.serie["e_fixa"]:
+            avisos.append("A repetição automática desta conta se encerra; as parcelas"
+                          " novas ficam soltas, para editar uma a uma.")
+        avisos.append("O que já foi pago não é tocado.")
+        self.lbl_aviso.configure(text="  ".join(avisos))
+
+    def salvar(self) -> None:
+        try:
+            resultado = services.reparcelar(
+                self.titulo_id, self._quantas(), self.dt_vencimento.get_iso(),
+                self._total())
+        except services.RegraNegocioError as erro:
+            perguntas.avisar(self, "Não foi possível", str(erro))
+            return
+        except ValueError as erro:
+            perguntas.avisar(self, "Data inválida", str(erro))
+            return
+        if resultado["parcelas"] == 1:
+            recado = (f"'{resultado['nome']}' virou uma parcela só de"
+                      f" {services.moeda(resultado['total_agora'])}, em"
+                      f" {services.para_br(resultado['primeiro_vencimento'])}.")
+        else:
+            recado = (f"'{resultado['nome']}' agora tem {resultado['parcelas']} parcelas"
+                      f" de {services.moeda(resultado['valor_parcela'])}, até"
+                      f" {services.para_br(resultado['ultimo_vencimento'])}.")
+        if resultado["desconto"] > 0.005:
+            recado += f" Desconto de {services.moeda(resultado['desconto'])}."
+        self.destroy()
+        self.ao_salvar(recado)
 
 
 # --------------------------------------------------------------------------- #

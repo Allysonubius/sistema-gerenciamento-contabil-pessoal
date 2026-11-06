@@ -3528,6 +3528,192 @@ def excluir_titulo(titulo_id: int) -> None:
     db.execute("DELETE FROM titulo WHERE id = ?", (titulo_id,))
 
 
+PARCELAS_MAXIMAS = 120
+
+
+def serie_do_titulo(titulo_id: int) -> dict:
+    """O que ainda está em aberto na mesma série deste título, deste mês à frente.
+
+    Série é a conta fixa ou o parcelamento de onde o título nasceu. Um título
+    avulso é uma série de um. O que já foi pago nunca entra: pago é história, e
+    história não se renegocia.
+    """
+    titulo = obter_titulo(titulo_id)
+    if titulo is None:
+        raise RegraNegocioError("Conta não encontrada.")
+    competencia = titulo["competencia"] or titulo["vencimento"][:7]
+    if titulo["recorrencia_id"]:
+        abertas = db.query(
+            "SELECT * FROM titulo WHERE recorrencia_id = ? AND status = 'ABERTO'"
+            "   AND competencia >= ? ORDER BY competencia",
+            (titulo["recorrencia_id"], competencia))
+    else:
+        abertas = [titulo] if titulo["status"] == "ABERTO" else []
+
+    rec = (db.query_one("SELECT * FROM recorrencia WHERE id = ?", (titulo["recorrencia_id"],))
+           if titulo["recorrencia_id"] else None)
+    total = round(sum(float(t["valor"]) for t in abertas), 2)
+    return {
+        "titulo": titulo,
+        "recorrencia_id": titulo["recorrencia_id"],
+        "nome": (rec["descricao"] if rec else titulo["descricao"]),
+        "e_fixa": rec is not None,
+        "tem_prazo": bool(rec and rec["fim"]),
+        "abertas": list(abertas),
+        "quantas": len(abertas),
+        "total": total,
+        "primeira": abertas[0]["competencia"] if abertas else "",
+        "ultima": abertas[-1]["competencia"] if abertas else "",
+    }
+
+
+def encerrar_serie_do_titulo(titulo_id: int) -> dict:
+    """Apaga este mês e os seguintes ainda em aberto, e para a repetição.
+
+    Quem apaga a mensalidade de novembro de uma assinatura que cancelou não
+    quer apagar só novembro: quer que ela pare. Antes, a conta fixa continuava
+    ativa, e os meses que não estavam na tela — nem os que ela ainda ia gerar —
+    sobreviviam ao gesto. Cancelar um serviço virava uma tarefa mensal.
+    """
+    serie = serie_do_titulo(titulo_id)
+    for aberta in serie["abertas"]:
+        _garantir_periodo_aberto(aberta["vencimento"], "apagado")
+
+    # Os estornos vêm antes do bloco: cada um grava um lançamento próprio, e
+    # gravá-los dentro da transação a encerraria no meio.
+    for aberta in serie["abertas"]:
+        estornar_provisao(aberta["id"])
+
+    removidos = 0
+    with db.transaction() as conn:
+        if serie["recorrencia_id"]:
+            # O fim fica no mês anterior ao primeiro que está sendo apagado:
+            # assim a geração não recria amanhã o que se apagou hoje.
+            anterior = _mes_anterior(serie["primeira"]) if serie["primeira"] else mes_atual()
+            conn.execute("UPDATE recorrencia SET ativo = 0, fim = ? WHERE id = ?",
+                         (anterior, serie["recorrencia_id"]))
+        for aberta in serie["abertas"]:
+            conn.execute("DELETE FROM titulo WHERE id = ?", (aberta["id"],))
+            removidos += 1
+    return {"removidos": removidos, "nome": serie["nome"], "era_fixa": serie["e_fixa"]}
+
+
+def pode_reparcelar(titulo_id: int) -> tuple[bool, str]:
+    """Dá para mexer nas parcelas desta conta? Quando não dá, por quê."""
+    titulo = obter_titulo(titulo_id)
+    if titulo is None:
+        return False, "Conta não encontrada."
+    if titulo["status"] != "ABERTO":
+        return False, ("Esta conta já foi paga ou cancelada. Desfaça o pagamento antes"
+                       " de mexer nas parcelas.")
+    serie = serie_do_titulo(titulo_id)
+    if serie["e_fixa"] and not serie["tem_prazo"]:
+        return False, ("Esta é uma conta fixa sem prazo — ela não tem um total a dividir."
+                       " Para mudar o valor dela, use 'Contas fixas'.")
+    if not serie["abertas"]:
+        return False, "Não há parcelas em aberto nesta conta."
+    return True, ""
+
+
+def reparcelar(titulo_id: int, parcelas: int, primeiro_vencimento: str,
+               valor_total: float | None = None) -> dict:
+    """Refaz o que falta pagar: em quantas vezes, a partir de quando, por quanto.
+
+    Com ``parcelas = 1`` junta tudo num mês só — é o caso de quitar de uma vez.
+    Com ``valor_total`` menor que a soma atual, registra o desconto combinado.
+
+    As parcelas novas nascem soltas da conta fixa de origem, e a origem se
+    encerra no mês anterior. É de propósito: renegociar é um acordo novo, e
+    deixá-las presas à série antiga faria a geração automática recriar depois
+    exatamente os meses que acabaram de ser substituídos.
+    """
+    pode, motivo = pode_reparcelar(titulo_id)
+    if not pode:
+        raise RegraNegocioError(motivo)
+    if parcelas < 1 or parcelas > PARCELAS_MAXIMAS:
+        raise RegraNegocioError(f"O número de parcelas deve ficar entre 1 e"
+                                f" {PARCELAS_MAXIMAS}.")
+    _validar_data(primeiro_vencimento)
+
+    serie = serie_do_titulo(titulo_id)
+    modelo = serie["titulo"]
+    total = round(serie["total"] if valor_total is None else float(valor_total), 2)
+    if total <= 0:
+        raise RegraNegocioError("O total a pagar deve ser maior que zero.")
+
+    base = date.fromisoformat(primeiro_vencimento)
+    vencimentos = [somar_meses(base, n) for n in range(parcelas)]
+    for aberta in serie["abertas"]:
+        _garantir_periodo_aberto(aberta["vencimento"], "substituído")
+    for vencimento in vencimentos:
+        _garantir_periodo_aberto(vencimento.isoformat(), "lançado nesta data")
+
+    # A sobra de centavos vai na primeira: quem paga prefere o arredondamento
+    # para cima logo, e não uma última parcela diferente das outras.
+    parcela = round(total / parcelas, 2)
+    sobra = round(total - parcela * parcelas, 2)
+
+    for aberta in serie["abertas"]:
+        estornar_provisao(aberta["id"])
+
+    with db.transaction() as conn:
+        if serie["recorrencia_id"]:
+            anterior = _mes_anterior(serie["primeira"])
+            conn.execute("UPDATE recorrencia SET ativo = 0, fim = ? WHERE id = ?",
+                         (anterior, serie["recorrencia_id"]))
+        for aberta in serie["abertas"]:
+            conn.execute("DELETE FROM titulo WHERE id = ?", (aberta["id"],))
+
+        criados = []
+        for numero, vencimento in enumerate(vencimentos, start=1):
+            valor = round(parcela + (sobra if numero == 1 else 0.0), 2)
+            descricao = (serie["nome"] if parcelas == 1
+                         else f"{serie['nome']} ({numero}/{parcelas})")
+            criados.append(conn.execute(
+                "INSERT INTO titulo (tipo, descricao, pessoa, valor, vencimento,"
+                " competencia, conta_id, centro_custo_id, observacao, multa_pct,"
+                " juros_mes_pct, conta_pagamento_id, pagamento_automatico)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (modelo["tipo"], descricao, modelo["pessoa"], valor,
+                 vencimento.isoformat(), vencimento.isoformat()[:7], modelo["conta_id"],
+                 modelo["centro_custo_id"], modelo["observacao"],
+                 modelo["multa_pct"] or 0, modelo["juros_mes_pct"] or 0,
+                 modelo["conta_pagamento_id"],
+                 modelo["pagamento_automatico"] or 0)).lastrowid)
+
+    return {
+        "nome": serie["nome"],
+        "substituidas": serie["quantas"],
+        "total_antes": serie["total"],
+        "total_agora": total,
+        "desconto": round(serie["total"] - total, 2),
+        "parcelas": parcelas,
+        "valor_parcela": parcela,
+        "primeira_parcela": round(parcela + sobra, 2),
+        "primeiro_vencimento": vencimentos[0].isoformat(),
+        "ultimo_vencimento": vencimentos[-1].isoformat(),
+        "ids": criados,
+    }
+
+
+def sugestoes_de_parcelamento(titulo_id: int) -> list[dict]:
+    """Atalhos para o diálogo: as divisões que se escolheria de qualquer jeito."""
+    serie = serie_do_titulo(titulo_id)
+    if not serie["abertas"]:
+        return []
+    total = serie["total"]
+    saida = []
+    for quantas in dict.fromkeys([1, 2, 3, serie["quantas"], 6, 12]):
+        if quantas < 1 or quantas > PARCELAS_MAXIMAS:
+            continue
+        saida.append({
+            "parcelas": quantas,
+            "valor": round(total / quantas, 2),
+            "atual": quantas == serie["quantas"],
+        })
+    return saida
+
+
 # --------------------------------------------------------------------------- #
 # Relatórios
 # --------------------------------------------------------------------------- #
