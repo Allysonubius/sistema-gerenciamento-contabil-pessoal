@@ -7,7 +7,7 @@ from pathlib import Path
 
 APP_NAME = "Sistema Contábil Pessoal"
 APP_SLUG = "SistemaContabil"
-APP_VERSION = "1.13.0"
+APP_VERSION = "1.13.1"
 
 
 def _base_dir() -> Path:

@@ -162,6 +162,7 @@ class Financeiro(ttk.Frame):
             ("automatico", "Pagamento", 95, "center"),
             ("categoria", "Categoria", 100, "w"),
             ("valor", "Valor", 90, "e"),
+            ("real", "Entrou / saiu", 110, "e"),
             ("atualizado", "Com juros hoje", 105, "e"),
             ("pago", "Pago em", 80, "center"),
         ], on_duplo_clique=lambda _i: self.editar(), largura_livre=True, altura=10)
@@ -392,11 +393,10 @@ class Financeiro(ttk.Frame):
         total_pagar = total_receber = total_encargos = 0.0
         # O que já entrou no período não depende do filtro de situação: mesmo
         # vendo só as contas em aberto, o usuário quer saber quanto recebeu.
-        entrou = db.query_one(
-            "SELECT IFNULL(SUM(IFNULL(valor_liquidado, valor)), 0) AS total FROM titulo"
-            " WHERE tipo = 'RECEBER' AND status = 'QUITADO' AND liquidado_em BETWEEN ? AND ?",
-            (desde, ate))
-        total_entrou = float(entrou["total"] or 0)
+        criterio_entrada = ("competencia" if self.cb_criterio.get() == "Mês de referência"
+                            else "vencimento")
+        entrou = services.recebido_no_periodo(desde, ate, criterio_entrada)
+        total_entrou = entrou["recebido"]
         # Pendências de antes do período, somadas à parte.
         atrasadas = {"PAGAR": 0.0, "RECEBER": 0.0, "encargos": 0.0, "quantidade": 0,
                      "desde": None}
@@ -460,13 +460,25 @@ class Financeiro(ttk.Frame):
             if competencia != t["vencimento"][:7]:
                 tags = tags + ("destaque",) if "destaque" not in tags else tags
 
+            # O que de fato entrou ou saiu. Mostrar só o combinado escondia
+            # justamente o caso em que a diferença importa: o salário que veio
+            # menor, a conta paga com desconto.
+            real = "—"
+            if t["status"] == "QUITADO":
+                recebido = (t["valor_liquidado"] if t["valor_liquidado"] is not None
+                            else t["valor"])
+                real = services.moeda(recebido)
+                if abs(float(recebido) - float(t["valor"])) > 0.005:
+                    real += "  ▲" if recebido > t["valor"] else "  ▼"
+                    tags = tags + ("destaque",)
+
             linhas.append(t)
             self.tabela.inserir(
                 (services.para_br(t["vencimento"]), mes_ref, situacao, quem,
                  t["descricao"], t["conta_pagamento_nome"] or "— não definida —",
                  self._texto_pagamento(t),
                  t["conta_nome"] or "",
-                 services.moeda(t["valor"]),
+                 services.moeda(t["valor"]), real,
                  services.moeda(t["valor_atualizado"]) if encargos > 0.005 else "—",
                  services.para_br(t["liquidado_em"])),
                 iid=t["id"], tags=tags)
@@ -501,8 +513,17 @@ class Financeiro(ttk.Frame):
         self.lbl_saldo.configure(
             text=f"Diferença: {services.moeda(saldo)}",
             foreground=CORES["sucesso"] if saldo >= 0 else CORES["perigo"])
-        self.lbl_entrou.configure(text=f"Entrou: {services.moeda(total_entrou)}",
-                                  foreground=CORES["sucesso"])
+        texto_entrou = f"Entrou: {services.moeda(total_entrou)}"
+        if entrou["quantas"] and abs(entrou["diferenca"]) > 0.005:
+            # A diferença entre o combinado e o que caiu é a informação que
+            # some quando se mostra só um dos dois números.
+            palavra = "a menos" if entrou["diferenca"] < 0 else "a mais"
+            texto_entrou += (f"  (de {services.moeda(entrou['combinado'])} previstos —"
+                             f" {services.moeda(abs(entrou['diferenca']))} {palavra})")
+        self.lbl_entrou.configure(
+            text=texto_entrou,
+            foreground=CORES["sucesso"] if entrou["diferenca"] >= -0.005
+            else CORES["perigo"])
         self._mostrar_caixa(linhas)
         self.faixa.recarregar()
 

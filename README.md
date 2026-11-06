@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 749 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 759 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -519,6 +519,20 @@ A lista separa o que está em uso do que já foi encerrado — *Ativas*, *Inativ
 *Todas*, com as ativas primeiro. Desativar sem caminho de volta seria apagar com outro
 nome; por isso o encerramento só oferece *apagar de vez* para a aplicação zerada e
 nunca usada, onde não há passado a perder.
+
+## O que entrou é o que caiu
+
+A coluna **Entrou / saiu** mostra, nas contas já pagas, o valor que de fato passou pela
+conta — e marca com ▼ ou ▲ quando ele difere do combinado. A coluna *Valor* continua
+mostrando o previsto: os dois lado a lado é o que torna visível o salário que veio menor ou
+a conta paga com desconto. Mostrar só um deles escondia justamente o caso em que a diferença
+importa.
+
+O total **Entrou**, no rodapé, conta pelo mesmo critério da lista — vencimento ou mês de
+referência — e não pela data em que o dinheiro caiu. O salário de novembro pago em 31 de
+outubro é dinheiro de novembro: contado pela data do pagamento, ele sumia de novembro e
+aparecia em outubro, onde ninguém o procurava. Quando o recebido difere do previsto, o
+rodapé diz de quanto era e quanto faltou.
 
 ## Parar uma conta que se repete
 

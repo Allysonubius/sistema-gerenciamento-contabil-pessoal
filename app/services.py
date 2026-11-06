@@ -3510,6 +3510,36 @@ def estornar_titulo(titulo_id: int) -> dict:
     return {"sobras_removidas": len(sobras)}
 
 
+def recebido_no_periodo(desde: str, ate: str, criterio: str = "vencimento") -> dict:
+    """Quanto de fato entrou das contas a receber do período.
+
+    Conta pelo mesmo critério da lista — vencimento ou mês de referência — e
+    não pela data em que o dinheiro caiu. O salário de novembro pago em 31 de
+    outubro é dinheiro de novembro: contado pela data do pagamento, ele sumia
+    de novembro e aparecia em outubro, onde ninguém o procurava.
+
+    O valor é o que entrou de verdade (``valor_liquidado``), não o combinado:
+    receber menos do que o previsto é o caso em que a diferença importa.
+    """
+    if criterio not in ("vencimento", "competencia"):
+        raise RegraNegocioError("Critério inválido.")
+    coluna = "vencimento" if criterio == "vencimento" else "competencia"
+    limites = (desde, ate) if coluna == "vencimento" else (desde[:7], ate[:7])
+    row = db.query_one(
+        "SELECT IFNULL(SUM(IFNULL(valor_liquidado, valor)), 0) AS recebido,"
+        "       IFNULL(SUM(valor), 0) AS combinado, COUNT(*) AS quantas"
+        f" FROM titulo WHERE tipo = 'RECEBER' AND status = 'QUITADO'"
+        f"   AND {coluna} BETWEEN ? AND ?", limites)
+    recebido = round(float(row["recebido"] or 0), 2)
+    combinado = round(float(row["combinado"] or 0), 2)
+    return {
+        "recebido": recebido,
+        "combinado": combinado,
+        "diferenca": round(recebido - combinado, 2),
+        "quantas": int(row["quantas"] or 0),
+    }
+
+
 def cancelar_titulo(titulo_id: int) -> None:
     titulo = db.query_one("SELECT status FROM titulo WHERE id = ?", (titulo_id,))
     if titulo is None:
