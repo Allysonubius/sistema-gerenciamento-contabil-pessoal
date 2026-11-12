@@ -71,7 +71,7 @@ quebrar: regra de negócio com defeito não chega ao executável.
 python -m pytest -q
 ```
 
-São 759 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
+São 775 testes sobre as regras que não podem quebrar: partidas dobradas, saldos, contas a
 pagar, contas fixas, cartões, faturas, dívidas, previsão, orçamento, conferência, backup,
 fechamento de competência e o lembrete dele, trilha de alterações, comprovantes, fluxo de
 caixa, poupança, a virada do mês, a senha de abertura, a instalação e a atualização dentro
@@ -519,6 +519,26 @@ A lista separa o que está em uso do que já foi encerrado — *Ativas*, *Inativ
 *Todas*, com as ativas primeiro. Desativar sem caminho de volta seria apagar com outro
 nome; por isso o encerramento só oferece *apagar de vez* para a aplicação zerada e
 nunca usada, onde não há passado a perder.
+
+## Os relatórios contam a mesma história
+
+Uma conferência de todos os relatórios contra os saldos mostrou a base contábil fechando ao
+centavo — débitos e créditos iguais, balanço sem diferença, extrato batendo com o saldo — e
+quatro pontos em que os relatórios discordavam do resto da ferramenta:
+
+- **Mês a mês e Ano a ano** chamavam de "em conta" a soma do dinheiro com as aplicações e os
+  outros saldos. Agora são duas colunas, *Dinheiro no fim* e *Investido e outros*, e a
+  primeira é exatamente o **Dinheiro** das outras telas. Conta desativada continua contando
+  no passado: o dinheiro que ela teve existiu.
+- **Previsão de saldo** deixava de fora as contas atrasadas e as que vencem hoje — mostrava um
+  fundo de poço melhor do que o real justamente para quem já estava devendo. Elas entram
+  hoje, marcadas como atrasadas, e a tabela mensal passou a usar multa e juros como a diária:
+  as duas chegam ao mesmo saldo.
+- **Categorias mês a mês** dividia a média de cada categoria só pelos meses com movimento,
+  enquanto a linha TOTAL dividia por todos. A soma das médias dava quase o dobro da média do
+  total, na mesma tabela. Agora todas dividem pelos meses da janela.
+- **Ganhos e gastos**, num período sem nada recebido, mostrava porcentagens absurdas. Sem o
+  que entrou não há peso a medir, e a coluna mostra um traço.
 
 ## O que entrou é o que caiu
 

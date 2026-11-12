@@ -16,7 +16,8 @@ RELATORIOS: list[tuple[str, str, str]] = [
     ("Mês a mês",
      "Quanto entrou e sobrou em cada mês",
      "Um mês por linha, desde o seu primeiro registro. Mostra o que entrou, o que saiu,"
-     " quanto sobrou e quanto havia em conta no fim de cada mês."),
+     " quanto sobrou, e no fim de cada mês quanto havia de dinheiro em conta e quanto"
+     " estava guardado em aplicações e outros saldos."),
     ("Ano a ano",
      "Se a sua vida financeira melhorou",
      "Um ano por linha, do primeiro registro até hoje. Mostra o que entrou, o que saiu,"
@@ -146,7 +147,8 @@ class Relatorios(ttk.Frame):
             ("saiu", "Saiu", 118, "e"),
             ("sobrou", "Sobrou no mês", 130, "e"),
             ("acumulado", "Acumulado", 130, "e"),
-            ("saldo", "Em conta no fim", 150, "e"),
+            ("saldo", "Dinheiro no fim", 135, "e"),
+            ("guardado", "Investido e outros", 140, "e"),
         ], largura_livre=True, altura=8)
         self.tab_mensal.definir_texto_vazio(
             "Ainda não há registros. Assim que você lançar o primeiro, os meses aparecem aqui.")
@@ -169,7 +171,8 @@ class Relatorios(ttk.Frame):
             ("resultado", "Sobrou no ano", 140, "e"),
             ("media", "Média por mês", 140, "e"),
             ("percentual", "% que sobrou", 115, "center"),
-            ("saldo", "Em conta no fim", 150, "e"),
+            ("saldo", "Dinheiro no fim", 135, "e"),
+            ("guardado", "Investido e outros", 140, "e"),
         ], largura_livre=True, altura=8)
         self.tab_anual.definir_texto_vazio(
             "Ainda não há registros. Assim que você lançar o primeiro, os anos aparecem aqui.")
@@ -194,7 +197,8 @@ class Relatorios(ttk.Frame):
                 (rotulo, services.moeda(linha["receita"]), services.moeda(linha["despesa"]),
                  services.moeda(linha["resultado"]),
                  services.moeda(round(linha["resultado"] / linha["meses"], 2)),
-                 sobra, services.moeda(linha["saldo_contas"])),
+                 sobra, services.moeda(linha["saldo_contas"]),
+                 services.moeda(linha["saldo_guardado"])),
                 iid=linha["ano"], tags=() if linha["resultado"] >= 0 else ("negativo",))
         self.tab_anual.finalizar()
 
@@ -401,8 +405,10 @@ class Relatorios(ttk.Frame):
         self.tab_previsao.limpar()
         for linha in previsao["linhas"]:
             if not linha["eventos"]:
+                rotulo = ("— saldo de hoje —" if linha["data"] == services.hoje_iso()
+                          else "— saldo no fim do período —")
                 self.tab_previsao.inserir(
-                    (services.para_br(linha["data"]), "— saldo de hoje —", "",
+                    (services.para_br(linha["data"]), rotulo, "",
                      services.moeda(linha["saldo"])), tags=("sintetica",))
                 continue
             for evento in linha["eventos"]:
@@ -486,7 +492,8 @@ class Relatorios(ttk.Frame):
             self.tab_mensal.inserir(
                 (linha["nome"].capitalize(), services.moeda(linha["receita"]),
                  services.moeda(linha["despesa"]), services.moeda(linha["sobrou"]),
-                 services.moeda(linha["acumulado"]), services.moeda(linha["saldo_contas"])),
+                 services.moeda(linha["acumulado"]), services.moeda(linha["saldo_contas"]),
+                 services.moeda(linha["saldo_guardado"])),
                 iid=linha["mes"], tags=() if linha["sobrou"] >= 0 else ("negativo",))
         self.tab_mensal.finalizar()
 
@@ -596,19 +603,25 @@ class Relatorios(ttk.Frame):
     def _gerar_dre(self, desde: str, ate: str) -> None:
         self.tab_dre.limpar()
         dados = services.dre(desde, ate)
-        base = dados["total_receitas"] or 1.0
+        base = dados["total_receitas"]
+
+        def peso(valor: float) -> str:
+            # Sem nada que entrou não há sobre o que medir o peso. Dividir por
+            # um, como era, transformava um gasto de 900 em "90000%".
+            return f"{valor / base * 100:.0f}%" if base > 0.005 else "—"
+
         for item in dados["receitas"]:
             self.tab_dre.inserir(("Entrou", item["nome"], services.moeda(item["valor"]),
-                                  f"{item['valor'] / base * 100:.0f}%"), tags=("positivo",))
+                                  peso(item["valor"])), tags=("positivo",))
         self.tab_dre.inserir(("", "TOTAL QUE ENTROU", services.moeda(dados["total_receitas"]),
-                              "100%"), tags=("sintetica",))
+                              peso(dados["total_receitas"])), tags=("sintetica",))
         for item in dados["despesas"]:
             self.tab_dre.inserir(("Saiu", item["nome"], services.moeda(-item["valor"]),
-                                  f"{item['valor'] / base * 100:.0f}%"), tags=("negativo",))
+                                  peso(item["valor"])), tags=("negativo",))
         self.tab_dre.inserir(("", "TOTAL QUE SAIU", services.moeda(-dados["total_despesas"]),
-                              f"{dados['total_despesas'] / base * 100:.0f}%"), tags=("sintetica",))
+                              peso(dados["total_despesas"])), tags=("sintetica",))
         self.tab_dre.inserir(("", "SOBROU NO PERÍODO", services.moeda(dados["resultado"]),
-                              f"{dados['resultado'] / base * 100:.0f}%"), tags=("sintetica",))
+                              peso(dados["resultado"])), tags=("sintetica",))
         self.tab_dre.finalizar()
         sobrou = dados["resultado"]
         self.lbl_dre.configure(

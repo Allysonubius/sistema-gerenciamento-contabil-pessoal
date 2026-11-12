@@ -3961,6 +3961,37 @@ def _fim_do_mes(competencia: str) -> str:
     return date(ano, mes, _ultimo_dia(ano, mes)).isoformat()
 
 
+def _variacao_das_carteiras(tamanho: int) -> dict[str, dict[str, float]]:
+    """Quanto o dinheiro e o guardado variaram em cada período do histórico.
+
+    ``tamanho`` é quantos caracteres da data formam o período: 7 para mês, 4
+    para ano. Devolve ``{periodo: {"dinheiro": x, "guardado": y}}``.
+
+    A separação é a mesma das outras telas: dinheiro é o que está nas contas
+    marcadas como disponível; aplicações e saldos que não são dinheiro livre
+    ficam em "guardado". Somados numa coluna só, o relatório dizia "em conta"
+    para um valor que o resto da ferramenta chama de Dinheiro + Investido +
+    Outros — e os dois números nunca batiam.
+
+    Conta desativada continua contando no passado: o dinheiro que ela teve
+    existiu, e tirá-la reescreveria os meses em que ele estava lá.
+    """
+    grupos = {c["id"]: grupo_da_conta(c)
+              for c in listar_carteiras(apenas_ativas=False) if c["tipo"] == "ATIVO"}
+    saida: dict[str, dict[str, float]] = {}
+    for row in db.query(
+            f"SELECT substr(l.data,1,{int(tamanho)}) AS periodo, p.conta_id,"
+            " SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS total"
+            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
+            " JOIN conta c ON c.id = p.conta_id"
+            " WHERE c.tipo='ATIVO' AND c.eh_carteira = 1"
+            " GROUP BY periodo, p.conta_id"):
+        chave = "dinheiro" if grupos.get(row["conta_id"]) == GRUPO_DO_FLUXO else "guardado"
+        item = saida.setdefault(row["periodo"], {"dinheiro": 0.0, "guardado": 0.0})
+        item[chave] = round(item[chave] + float(row["total"] or 0.0), 2)
+    return saida
+
+
 def resumo_mensal(meses: list[str]) -> list[dict]:
     """Entrou, saiu, sobrou, acumulado e dinheiro em conta no fim de cada mês."""
     if not meses:
@@ -3978,29 +4009,20 @@ def resumo_mensal(meses: list[str]) -> list[dict]:
             chave = "receita" if row["tipo"] == "RECEITA" else "despesa"
             movimento[row["mes"]][chave] = round(float(row["total"] or 0.0), 2)
 
-    # Variação do dinheiro em contas (disponível) por mês, para acumular o saldo.
-    variacao = {m: 0.0 for m in meses}
-    saldo_antes = 0.0
-    for row in db.query(
-            "SELECT substr(l.data,1,7) AS mes,"
-            " SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS total"
-            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
-            " JOIN conta c ON c.id = p.conta_id"
-            " WHERE c.tipo='ATIVO' AND c.eh_carteira = 1"
-            " GROUP BY mes"):
-        valor = round(float(row["total"] or 0.0), 2)
-        if row["mes"] in variacao:
-            variacao[row["mes"]] = valor
-        elif row["mes"] < meses[0]:
-            saldo_antes += valor
+    # Variação do dinheiro e do guardado por mês, para acumular os saldos.
+    variacao = _variacao_das_carteiras(7)
+    saldo = round(sum(v["dinheiro"] for m, v in variacao.items() if m < meses[0]), 2)
+    guardado = round(sum(v["guardado"] for m, v in variacao.items() if m < meses[0]), 2)
 
-    linhas, acumulado, saldo = [], 0.0, saldo_antes
+    linhas, acumulado = [], 0.0
     for mes in meses:
         receita = movimento[mes]["receita"]
         despesa = movimento[mes]["despesa"]
         sobrou = round(receita - despesa, 2)
         acumulado = round(acumulado + sobrou, 2)
-        saldo = round(saldo + variacao[mes], 2)
+        do_mes = variacao.get(mes, {"dinheiro": 0.0, "guardado": 0.0})
+        saldo = round(saldo + do_mes["dinheiro"], 2)
+        guardado = round(guardado + do_mes["guardado"], 2)
         linhas.append({
             "mes": mes,
             "nome": mes_nome(mes),
@@ -4009,6 +4031,7 @@ def resumo_mensal(meses: list[str]) -> list[dict]:
             "sobrou": sobrou,
             "acumulado": acumulado,
             "saldo_contas": saldo,
+            "saldo_guardado": guardado,
         })
     return linhas
 
@@ -4044,28 +4067,22 @@ def resumo_anual() -> list[dict]:
             chave = "receita" if row["tipo"] == "RECEITA" else "despesa"
             movimento[row["ano"]][chave] = round(float(row["total"] or 0.0), 2)
 
-    variacao = {ano: 0.0 for ano in anos}
-    for row in db.query(
-            "SELECT substr(l.data,1,4) AS ano,"
-            " SUM(CASE WHEN p.tipo='D' THEN p.valor ELSE -p.valor END) AS total"
-            " FROM partida p JOIN lancamento l ON l.id = p.lancamento_id"
-            " JOIN conta c ON c.id = p.conta_id"
-            " WHERE c.tipo='ATIVO' AND c.eh_carteira = 1 GROUP BY ano"):
-        if row["ano"] in variacao:
-            variacao[row["ano"]] = round(float(row["total"] or 0.0), 2)
+    variacao = _variacao_das_carteiras(4)
 
     # Quantos meses cada ano teve de fato: o primeiro começa no mês do primeiro
     # registro e o ano corrente termina neste mês. Sem isso, a média mensal de
     # um ano de três meses sairia dividida por doze.
     primeiro_mes = primeiro_mes_registrado() or ""
     hoje = date.today()
-    linhas, acumulado, saldo = [], 0.0, 0.0
+    linhas, acumulado, saldo, guardado = [], 0.0, 0.0, 0.0
     for ano in anos:
         receita = movimento[ano]["receita"]
         despesa = movimento[ano]["despesa"]
         resultado = round(receita - despesa, 2)
         acumulado = round(acumulado + resultado, 2)
-        saldo = round(saldo + variacao[ano], 2)
+        do_ano = variacao.get(ano, {"dinheiro": 0.0, "guardado": 0.0})
+        saldo = round(saldo + do_ano["dinheiro"], 2)
+        guardado = round(guardado + do_ano["guardado"], 2)
 
         inicio = int(primeiro_mes[5:]) if primeiro_mes[:4] == ano else 1
         fim = hoje.month if int(ano) == hoje.year else 12
@@ -4077,6 +4094,7 @@ def resumo_anual() -> list[dict]:
             "resultado": resultado,
             "acumulado": acumulado,
             "saldo_contas": saldo,
+            "saldo_guardado": guardado,
             "meses": meses,
             "media_receita": round(receita / meses, 2),
             "media_despesa": round(despesa / meses, 2),
@@ -4446,9 +4464,12 @@ def matriz_categorias(meses: list[str], tipo: str = "DESPESA") -> list[dict]:
         total = round(sum(item["meses"].values()), 2)
         if abs(total) < CENTAVO:
             continue
-        movimentados = [v for v in item["meses"].values() if abs(v) > CENTAVO]
         item["total"] = total
-        item["media"] = round(total / len(movimentados), 2) if movimentados else 0.0
+        # Dividida por todos os meses da janela, e não só pelos que tiveram
+        # movimento: é a única média que se pode somar. Pelos meses com
+        # movimento, a soma das médias das categorias chegava a quase o dobro
+        # da média da linha TOTAL, na mesma tabela.
+        item["media"] = round(total / len(meses), 2)
         ultimo = item["meses"][meses[-1]]
         anterior = item["meses"][meses[-2]] if len(meses) > 1 else 0.0
         item["variacao"] = round(ultimo - anterior, 2)
@@ -5496,32 +5517,45 @@ def previsao_saldo(dias: int = 90) -> dict:
     Considera: saldo de hoje das carteiras, contas a pagar e a receber em aberto,
     contas fixas ainda não geradas e parcelas de compras já lançadas no futuro.
     """
-    hoje = date.today()
+    hoje = date.fromisoformat(hoje_iso())
     fim = hoje + timedelta(days=dias)
-    saldo = total_disponivel()["tem"]
+    saldo_de_hoje = total_disponivel()["tem"]
+    saldo = saldo_de_hoje
 
     eventos: dict[str, list[dict]] = {}
 
     def agendar(data_iso: str, descricao: str, valor: float, tipo: str) -> None:
-        if not hoje.isoformat() < data_iso <= fim.isoformat():
+        # Hoje entra. A comparação era estrita, e com ela a conta que vence
+        # hoje e todas as atrasadas — que são trazidas para hoje — ficavam de
+        # fora: a previsão mostrava um fundo de poço melhor do que o real
+        # justamente para quem já estava devendo.
+        if not hoje.isoformat() <= data_iso <= fim.isoformat():
             return
         eventos.setdefault(data_iso, []).append(
             {"descricao": descricao, "valor": valor, "tipo": tipo})
 
     for titulo in db.query(
-            "SELECT * FROM titulo WHERE status='ABERTO' AND vencimento <= ?", (fim.isoformat(),)):
+            "SELECT * FROM titulo WHERE status='ABERTO' AND vencimento <= ?"
+            " ORDER BY vencimento, id", (fim.isoformat(),)):
         encargos = encargos_do_titulo(titulo)
         valor = encargos["valor_atualizado"]
+        atrasada = titulo["vencimento"] < hoje.isoformat()
         data = max(titulo["vencimento"], hoje.isoformat())
+        descricao = titulo["descricao"]
+        if atrasada:
+            descricao += f" (atrasada desde {para_br(titulo['vencimento'])})"
         if titulo["tipo"] == "PAGAR":
-            agendar(data, titulo["descricao"], -valor, "conta")
+            agendar(data, descricao, -valor, "conta")
         else:
-            agendar(data, titulo["descricao"], valor, "recebimento")
+            agendar(data, descricao, valor, "recebimento")
 
     # Parcelas de cartão não entram direto: elas aumentam a dívida do cartão e
     # saem do bolso quando a fatura vence — momento já coberto pelos títulos acima.
 
-    linhas, menor, menor_data = [], saldo, hoje.isoformat()
+    # A primeira linha é sempre o saldo de hoje, antes de qualquer conta: é o
+    # ponto de partida que a pessoa confere com o que vê nas outras telas.
+    linhas = [{"data": hoje.isoformat(), "saldo": saldo, "eventos": []}]
+    menor, menor_data = saldo, hoje.isoformat()
     atual = hoje
     while atual <= fim:
         chave = atual.isoformat()
@@ -5529,12 +5563,12 @@ def previsao_saldo(dias: int = 90) -> dict:
         saldo = round(saldo + sum(e["valor"] for e in do_dia), 2)
         if saldo < menor:
             menor, menor_data = saldo, chave
-        if do_dia or atual == hoje or atual == fim:
+        if do_dia or (atual == fim and atual != hoje):
             linhas.append({"data": chave, "saldo": saldo, "eventos": do_dia})
         atual += timedelta(days=1)
 
     return {
-        "hoje": total_disponivel()["tem"],
+        "hoje": saldo_de_hoje,
         "final": saldo,
         "menor_saldo": menor,
         "menor_data": menor_data,
@@ -5785,22 +5819,30 @@ def previsao_mensal(meses: int | None = None) -> list[dict]:
     escondia justamente as parcelas mais distantes.
     """
     meses = meses or meses_de_compromisso()
-    hoje = date.today()
+    hoje = date.fromisoformat(hoje_iso())
     saldo = total_disponivel()["tem"]
     saida = []
     for indice in range(meses):
-        referencia = somar_meses(hoje, indice)
+        referencia = somar_meses(hoje.replace(day=1), indice)
         competencia = referencia.strftime("%Y-%m")
         ano, mes = referencia.year, referencia.month
-        inicio = max(hoje.isoformat(), f"{competencia}-01")
+        # O primeiro mês carrega tudo o que ficou para trás: conta atrasada
+        # continua sendo conta a pagar, e é agora que ela pesa.
+        inicio = "0001-01-01" if indice == 0 else f"{competencia}-01"
         fim = date(ano, mes, _ultimo_dia(ano, mes)).isoformat()
 
-        row = db.query_one(
-            "SELECT COALESCE(SUM(CASE WHEN tipo='PAGAR' THEN valor ELSE 0 END),0) AS pagar,"
-            " COALESCE(SUM(CASE WHEN tipo='RECEBER' THEN valor ELSE 0 END),0) AS receber"
-            " FROM titulo WHERE status='ABERTO' AND vencimento BETWEEN ? AND ?", (inicio, fim))
-        pagar = round(float(row["pagar"]), 2)
-        receber = round(float(row["receber"]), 2)
+        # Com multa e juros, como na previsão dia a dia: as duas tabelas ficam
+        # lado a lado na tela e precisam chegar ao mesmo saldo.
+        pagar = receber = 0.0
+        for titulo in db.query(
+                "SELECT * FROM titulo WHERE status='ABERTO' AND vencimento BETWEEN ? AND ?",
+                (inicio, fim)):
+            valor = encargos_do_titulo(titulo)["valor_atualizado"]
+            if titulo["tipo"] == "PAGAR":
+                pagar += valor
+            else:
+                receber += valor
+        pagar, receber = round(pagar, 2), round(receber, 2)
         saldo = round(saldo + receber - pagar, 2)
         saida.append({"mes": competencia, "nome": mes_nome(competencia),
                       "pagar": pagar, "receber": receber,
